@@ -1,0 +1,11 @@
+The program breaks if i have more than 1 keys in main node is because in fn children_not_empty, only the 1st item from root node is selected. 
+1st try- Create a bool var that gets true at the end of children_not_empty. (Also deleted min_size because it was useless)
+    -> Scrapped as it isnt expandable beyond root node
+2nd try - min_size_subceeded() will return a bool & if true, other value except 1st key gets added.
+    -> Scrapped as creating new instance of function resets the bool value.
+3rd try - Global static Mutex<T> which tracks the number of time min_size_subceeded() has been invoked 
+    -> Would need millions of static var for high nodes count.
+4th try - create initial rank as 0 and add it later.
+    -> Just doesn't work
+5th try - Create a separate function that handles the error prone logic. (Also deleted max_size because it was useless too + The output looks cleaner).
+    -> IT WORKED LETSGOOOOOOOOOOO
