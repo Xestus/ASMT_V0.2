@@ -9,3 +9,11 @@ The program breaks if i have more than 1 keys in main node is because in fn chil
     -> Just doesn't work
 5th try - Create a separate function that handles the error prone logic. (Also deleted max_size because it was useless too + The output looks cleaner).
     -> IT WORKED LETSGOOOOOOOOOOO
+    
+    
+The fn responsible for adding keys that isnt less than lowest root key and higher than highest root ket isn't working.
+1st try - The else loop in min_size_1() responsible for handling non lowest/highest was empty which according to my assumption happens when the input key is equal to root key, hence duplication.
+    -> Tried fixing by removing the the key value from the child. Didn't work.
+2nd try -> I moved the implementation outside the else loop which caused more problem.
+3rd try -> The else loop must contain the original root keys that gets duplicated, hence the original root Items could be sent into a new vector to be later pushed.
+    -> Failed as `else` would contain more than the orignal root keys.

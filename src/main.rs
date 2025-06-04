@@ -6,7 +6,7 @@ use lazy_static::lazy_static;
 
 static NODE_SIZE: OnceCell<u8> = OnceCell::new();
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct Items {
     key: u8,
     value: String,
@@ -33,12 +33,11 @@ impl Node {
         NODE_INSTANCE.lock().unwrap().push(instance.clone());
         instance
     }
-
     fn insert(&mut self, k: u8, v: String) -> () {
         let meow = self.input.len();
         if meow > 1 && !self.children.is_empty() {
             self.input.push(Items {key: k, value: v.clone(), rank: self.rank});
-            println!("MEOWWWWWWWWWWWWWWWWWWWWWW");
+            println!("Splitted");
             self.more_than_one_parent_key_when_children_not_empty();
             // Create a separate implementation for it.
         }
@@ -163,6 +162,14 @@ impl Node {
     }
 
     fn min_size_1(&mut self,k: Vec<Items>, count: usize) {
+
+
+        println!("##################################################################");
+        println!("KAW {:?}", self.children);
+        println!("##################################################################");
+
+
+        let mut temp_vector = Vec::new();
         if k[0].key < self.input[0].key {
             self.children[0].lock().unwrap().input.push(k[0].clone());
             self.children.remove(count-1);
@@ -172,17 +179,51 @@ impl Node {
         } else {
             for i in self.input.iter().cloned().collect::<Vec<Items>>() {
                 // self.min_size_2(k.clone(), count);
+                temp_vector.push(i.clone());
             }
         }
+
+        let mut child_holder = Vec::new();
+        
+        for p in temp_vector.iter() {
+            for z in self.children.iter().cloned().collect::<Vec<Arc<Mutex<Node>>>>() {
+                let mut c = 0;
+                for v in z.lock().unwrap().input.iter() {
+                    c = c +1;
+                    println!("AAAAAAA {:?}", v);
+                    if p.key == v.key {
+                        println!("XXX {:?} {:?}", p, self.children[self.children.len() - c -1 ].clone() );
+                        child_holder.push(self.children[c-1].clone());
+                         self.children.remove(self.children.len() - c - 1);
+                    }
+                }
+            }
+        }
+
+
+        /*        self.children.clear();
+                for i in 1..child_holder.len() {
+                    self.children.push(child_holder[i].clone());
+
+                }*/
+        println!("ZZZZ {:?}", self.children);
+
+
         self.sort_children_items();
         if self.children[self.input.len()].lock().unwrap().input.len() > NODE_SIZE.get().unwrap().clone() as usize {
+            println!("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$");
+            println!("{:?}", self);
+            println!("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$");
             self.children[self.input.len()].lock().unwrap().max_children_size_exceeded();
         } else if self.children[0].lock().unwrap().input.len() > NODE_SIZE.get().unwrap().clone() as usize {
+            println!("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$");
+            println!("{:?}", self);
+            println!("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$");
             self.children[0].lock().unwrap().max_children_size_exceeded();
         }
         self.children_iteration();
     }
-    
+
     fn children_iteration(&mut self) -> () {
         let mut c = 0;
         for i in self.children.iter().cloned().collect::<Vec<Arc<Mutex<Node>>>>() {
@@ -214,8 +255,6 @@ impl Node {
         let breaking_point = (items_size + 1)/2;
         let temp_storage = self.clone();
         let mut count = 0;
-        let node_size = NODE_SIZE.get().unwrap().clone() as usize;
-
         self.input.clear();
         for _v in temp_storage.input.iter() {
             count +=1;
@@ -353,7 +392,8 @@ fn main() {
     f.lock().unwrap().insert(18, String::from("Neigh"));
     f.lock().unwrap().insert(7, String::from("Myahhh"));
     f.lock().unwrap().insert(50, String::from("Oink-Oink"));
-    f.lock().unwrap().insert(12, String::from("Poopa"));
+    f.lock().unwrap().insert(32, String::from("Bah"));
+    // f.lock().unwrap().insert(52, String::from("Mahh"));
 
 
 
