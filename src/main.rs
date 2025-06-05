@@ -86,10 +86,6 @@ impl Node {
             }
         }
         let k = self.children.iter().cloned().collect::<Vec<Arc<Mutex<Node>>>>();
-        println!("BBBBB --------------------------------------------------------------------------------");
-        println!("MEOMOTW {:?}", self);
-        println!("ZZZZZZZ --------------------------------------------------------------------------------");
-
         for i in k {
             if i.lock().unwrap().input.len() < (NODE_SIZE.get().unwrap().clone()/2) as usize {
                 println!("K");
@@ -98,13 +94,9 @@ impl Node {
         }
 
         self.sort_children_nodes();
-
     }
     
     fn max_size_exceeded(&mut self)  {
-        // let newNode = vec
-        // tried to create a new node for else if data but rank issue. Wishing to implement a function that checks whether current rank is occupied or not.
-        // println!("jhdsagdjgsajdjsadgjsa {:?}", self.input);
         bubble_sort(&mut self.input);
 
         let struct_one = Node::new();
@@ -141,6 +133,11 @@ impl Node {
     }
     
     fn min_size_subceeded(&mut self) {
+
+        println!("SSSSSSS --------------------------------------------------------------------------------");
+        println!("SSSSSSSSSS {:?}", self);
+        println!("SSSSSSSS --------------------------------------------------------------------------------");
+
         let mut count = 0;
         // println!("K {}", self.input.len());
 /*        if self.input.len() > 1 {
@@ -148,6 +145,7 @@ impl Node {
                 count += 1;
                 let k = i.lock().unwrap().input.clone();
                 if k.len() < (NODE_SIZE.get().unwrap().clone()/2) as usize {
+                    println!("OOOOOOOOOOOOOO");
                 }
             }
         } else*/ if self.children.len() > 1 {
@@ -155,72 +153,74 @@ impl Node {
                 count += 1;
                 let k = i.lock().unwrap().input.clone();
                 if k.len() < (NODE_SIZE.get().unwrap().clone()/2) as usize {
+
                     self.min_size_1(k,count);
                 }
             }
         }
+
+/*        println!("BBBBB --------------------------------------------------------------------------------");
+        println!("MEOMOTW {:?}", self);
+        println!("ZZZZZZZ --------------------------------------------------------------------------------");
+*/
     }
 
     fn min_size_1(&mut self,k: Vec<Items>, count: usize) {
 
-
-        println!("##################################################################");
-        println!("KAW {:?}", self.children);
-        println!("##################################################################");
-
-
+        println!("PP {:?}", k);
         let mut temp_vector = Vec::new();
         if k[0].key < self.input[0].key {
+            println!("{:?}", k[0].key);
             self.children[0].lock().unwrap().input.push(k[0].clone());
             self.children.remove(count-1);
         } else if k[0].key > self.input[self.input.len()-1].key {
+            println!("{:?}", k[0].key);
             self.children[self.input.len()].lock().unwrap().input.push(k[0].clone());
             self.children.remove(count-1);
-        } else {
+        } else if k[0].key == self.input[0].key || k[0].key == self.input[self.input.len()-1].key {
             for i in self.input.iter().cloned().collect::<Vec<Items>>() {
                 // self.min_size_2(k.clone(), count);
+                println!("{:?}", i);
+                println!("Minamoto");
                 temp_vector.push(i.clone());
             }
-        }
+        } else {
+            for i in 1..self.input.len()-1 {
+                println!("{}", self.input[i].key);
+                if k[0].key != self.input[i].key {
+                    println!("///////////////////////////////////////////////////////////");
+                    println!("{:?}", k[0].key);
+                    println!("MEow");
+                    println!("///////////////////////////////////////////////////////////");
 
-        let mut child_holder = Vec::new();
+                }
+            }
+        }
+        
         
         for p in temp_vector.iter() {
+            let mut c = 0;
             for z in self.children.iter().cloned().collect::<Vec<Arc<Mutex<Node>>>>() {
-                let mut c = 0;
+                c = c +1;
                 for v in z.lock().unwrap().input.iter() {
-                    c = c +1;
-                    println!("AAAAAAA {:?}", v);
                     if p.key == v.key {
-                        println!("XXX {:?} {:?}", p, self.children[self.children.len() - c -1 ].clone() );
-                        child_holder.push(self.children[c-1].clone());
-                         self.children.remove(self.children.len() - c - 1);
+                        self.children.remove( c - 1);
                     }
                 }
             }
         }
 
-
-        /*        self.children.clear();
-                for i in 1..child_holder.len() {
-                    self.children.push(child_holder[i].clone());
-
-                }*/
-        println!("ZZZZ {:?}", self.children);
-
+        println!("ZZ {:?}", self.children);
 
         self.sort_children_items();
         if self.children[self.input.len()].lock().unwrap().input.len() > NODE_SIZE.get().unwrap().clone() as usize {
-            println!("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$");
-            println!("{:?}", self);
-            println!("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$");
             self.children[self.input.len()].lock().unwrap().max_children_size_exceeded();
         } else if self.children[0].lock().unwrap().input.len() > NODE_SIZE.get().unwrap().clone() as usize {
-            println!("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$");
-            println!("{:?}", self);
-            println!("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$");
             self.children[0].lock().unwrap().max_children_size_exceeded();
         }
+
+        // Add a function that takes the last value (if single) and merges it to required function. 
+        
         self.children_iteration();
     }
 
@@ -274,7 +274,6 @@ impl Node {
         struct_two.lock().unwrap().rank = self.rank + 1;
         self.children.push(struct_one.clone());
         self.children.push(struct_two.clone());
-        println!("AAAAAA");
 
 /*        println!("###################################################################################");
         println!("{:?}", self);
