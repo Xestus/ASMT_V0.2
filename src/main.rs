@@ -185,7 +185,8 @@ impl Node {
                 temp_vector.push(i.clone());
             }
         } else {
-            for i in 1..self.input.len()-1 {
+            // This shit does absolutely nothing.
+/*            for i in 1..self.input.len()-1 {
                 println!("{}", self.input[i].key);
                 if k[0].key != self.input[i].key {
                     println!("///////////////////////////////////////////////////////////");
@@ -195,7 +196,7 @@ impl Node {
 
                 }
             }
-        }
+*/        }
         
         
         for p in temp_vector.iter() {
@@ -221,7 +222,32 @@ impl Node {
 
         // Add a function that takes the last value (if single) and merges it to required function. 
         
+        // HACk: A random rank 1 appears inside the code, so, picked 3 keys from children for comparison for selected number
+        let picked_struct = self.children[self.children.len() - 1].lock().unwrap().clone();
+        let random_child = self.children[0].lock().unwrap().clone().rank;
+        if picked_struct.input.len() < (NODE_SIZE.get().unwrap().clone()/2) as usize && picked_struct.rank == random_child {
+            println!("{:?}", self.children);
+            self.min_size_2();
+        }
         self.children_iteration();
+    }
+    
+    fn min_size_2(&mut self) {
+        let x = self.children[self.children.len() - 1].lock().unwrap().input.clone();
+        self.children.remove(self.children.len() - 1);
+        
+        if x[0].key < self.input[0].key {
+            self.children[0].lock().unwrap().input.push(x[0].clone());
+        } else if x[0].key > self.input[self.input.len()-1].key {
+            self.children[self.input.len()-1].lock().unwrap().input.push(x[0].clone());
+        } else {
+            for i in 0..self.input.len() - 1 {
+                if x[0].key > self.input[i].key && x[0].key < self.input[i+1].key {
+                    self.children[i+1].lock().unwrap().input.push(x[0].clone());
+                }
+            }
+        }
+        
     }
 
     fn children_iteration(&mut self) -> () {
@@ -236,8 +262,6 @@ impl Node {
                 i.lock().unwrap().children.clear();
 
                 self.children.remove(c-1);
-                // REMOVE THE CHILDREN OF KEY 6.
-                // self.children[c].lock().unwrap().
             }
         }
     }
@@ -274,11 +298,7 @@ impl Node {
         struct_two.lock().unwrap().rank = self.rank + 1;
         self.children.push(struct_one.clone());
         self.children.push(struct_two.clone());
-
-/*        println!("###################################################################################");
-        println!("{:?}", self);
-        println!("###################################################################################");
-*/
+        
     }
 
     // I hate my life. What does it even do?
@@ -287,10 +307,6 @@ impl Node {
     }
     
     fn children_not_empty(&mut self) -> () {
-/*        println!("AAAAA --------------------------------------------------------------------------------");
-        println!("MEOMOTW {:?}", self);
-        println!("AAAAA --------------------------------------------------------------------------------");*/
-
         let mut placeholder_struct = self.clone();
 
         let size_of_main_node = self.input.len();
@@ -318,9 +334,6 @@ impl Node {
             }
         }
             let k = self.children.iter().cloned().collect::<Vec<Arc<Mutex<Node>>>>();
-/*        println!("BBBBB --------------------------------------------------------------------------------");
-        println!("MEOMOTW {:?}", self);
-        println!("BBBBB --------------------------------------------------------------------------------");*/
 
         for i in k {
             if i.lock().unwrap().input.len() < (NODE_SIZE.get().unwrap().clone()/2) as usize {
