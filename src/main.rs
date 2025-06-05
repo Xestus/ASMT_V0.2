@@ -169,34 +169,39 @@ impl Node {
 
         println!("PP {:?}", k);
         let mut temp_vector = Vec::new();
-        if k[0].key < self.input[0].key {
-            println!("{:?}", k[0].key);
-            self.children[0].lock().unwrap().input.push(k[0].clone());
-            self.children.remove(count-1);
-        } else if k[0].key > self.input[self.input.len()-1].key {
-            println!("{:?}", k[0].key);
-            self.children[self.input.len()].lock().unwrap().input.push(k[0].clone());
-            self.children.remove(count-1);
-        } else if k[0].key == self.input[0].key || k[0].key == self.input[self.input.len()-1].key {
-            for i in self.input.iter().cloned().collect::<Vec<Items>>() {
-                // self.min_size_2(k.clone(), count);
-                println!("{:?}", i);
-                println!("Minamoto");
-                temp_vector.push(i.clone());
-            }
-        } else {
-            // This shit does absolutely nothing.
-/*            for i in 1..self.input.len()-1 {
-                println!("{}", self.input[i].key);
-                if k[0].key != self.input[i].key {
-                    println!("///////////////////////////////////////////////////////////");
-                    println!("{:?}", k[0].key);
-                    println!("MEow");
-                    println!("///////////////////////////////////////////////////////////");
-
+        
+        if self.input.len() < 3 {
+            if k[0].key < self.input[0].key {
+                println!("{:?}", k[0].key);
+                self.children[0].lock().unwrap().input.push(k[0].clone());
+                self.children.remove(count-1);
+            } else if k[0].key > self.input[self.input.len()-1].key {
+                println!("{:?}", self);
+                self.children[self.input.len()].lock().unwrap().input.push(k[0].clone());
+                // println!("ZZZZ {:?}", self);
+                self.children.remove(count-1);
+            } else if k[0].key == self.input[0].key || k[0].key == self.input[self.input.len()-1].key {
+                for i in self.input.iter().cloned().collect::<Vec<Items>>() {
+                    // self.min_size_2(k.clone(), count);
+                    println!("{:?}", i);
+                    println!("Minamoto");
+                    temp_vector.push(i.clone());
                 }
-            }
-*/        }
+            } else {
+                // This shit does absolutely nothing.
+                /*            for i in 1..self.input.len()-1 {
+                                println!("{}", self.input[i].key);
+                                if k[0].key != self.input[i].key {
+                                    println!("///////////////////////////////////////////////////////////");
+                                    println!("{:?}", k[0].key);
+                                    println!("MEow");
+                                    println!("///////////////////////////////////////////////////////////");
+                
+                                }
+                            }
+                */        }
+        }
+
         
         
         for p in temp_vector.iter() {
@@ -405,7 +410,7 @@ fn main() {
     f.lock().unwrap().insert(7, String::from("Myahhh"));
     f.lock().unwrap().insert(50, String::from("Oink-Oink"));
     f.lock().unwrap().insert(32, String::from("Bah"));
-    // f.lock().unwrap().insert(52, String::from("Mahh"));
+    f.lock().unwrap().insert(12, String::from("Mahh"));
 
 
 
