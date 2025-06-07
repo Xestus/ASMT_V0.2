@@ -22,3 +22,6 @@ The fn responsible for adding keys that isnt less than lowest root key and highe
     
     4.1 try - Created a new fn that takes the last value and puts it inside the pre-existing child node.
             -> Worked lol.
+            
+Forced to implement a parent reference with weak but faced,
+    1) `std::rc::Weak<Mutex<Node>>` cannot be sent between threads safely & found my original lazy_static! was pretty heavy.

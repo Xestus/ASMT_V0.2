@@ -16,6 +16,7 @@ struct Items {
 struct Node {
     input: Vec<Items>,
     rank: u8,
+    // parent: Option<Weak<Mutex<Node>>>
     children: Vec<Arc<Mutex<Node>>>,
 }
 
@@ -37,7 +38,7 @@ impl Node {
         let meow = self.input.len();
         if meow > 1 && !self.children.is_empty() {
             self.input.push(Items {key: k, value: v.clone(), rank: self.rank});
-            println!("Splitted");
+            // println!("Splitted");
             self.more_than_one_parent_key_when_children_not_empty();
             // Create a separate implementation for it.
         }
@@ -55,10 +56,6 @@ impl Node {
     }
 
     fn more_than_one_parent_key_when_children_not_empty(&mut self) {
-        println!("AAAAA --------------------------------------------------------------------------------");
-        println!("MEOMOTW {:?}", self);
-        println!("AAAAA --------------------------------------------------------------------------------");
-
         let mut placeholder_struct = self.clone();
 
         let size_of_main_node = self.input.len();
@@ -68,7 +65,6 @@ impl Node {
             self.input.push(placeholder_struct.input[i].clone());
             self.sort_main_nodes();
         }
-        println!("Stupid {:?}", self.input);
         self.sort_children_nodes();
 
 
@@ -88,7 +84,6 @@ impl Node {
         let k = self.children.iter().cloned().collect::<Vec<Arc<Mutex<Node>>>>();
         for i in k {
             if i.lock().unwrap().input.len() < (NODE_SIZE.get().unwrap().clone()/2) as usize {
-                println!("K");
                 self.min_size_subceeded();
             }
         }
@@ -133,22 +128,8 @@ impl Node {
     }
     
     fn min_size_subceeded(&mut self) {
-
-        println!("SSSSSSS --------------------------------------------------------------------------------");
-        println!("SSSSSSSSSS {:?}", self);
-        println!("SSSSSSSS --------------------------------------------------------------------------------");
-
         let mut count = 0;
-        // println!("K {}", self.input.len());
-/*        if self.input.len() > 1 {
-            for i in self.children.iter().cloned().collect::<Vec<Arc<Mutex<Node>>>>() {
-                count += 1;
-                let k = i.lock().unwrap().input.clone();
-                if k.len() < (NODE_SIZE.get().unwrap().clone()/2) as usize {
-                    println!("OOOOOOOOOOOOOO");
-                }
-            }
-        } else*/ if self.children.len() > 1 {
+        if self.children.len() > 1 {
             for i in self.children.iter().cloned().collect::<Vec<Arc<Mutex<Node>>>>() {
                 count += 1;
                 let k = i.lock().unwrap().input.clone();
@@ -159,51 +140,40 @@ impl Node {
             }
         }
 
-/*        println!("BBBBB --------------------------------------------------------------------------------");
+/*        println!("AAAAA --------------------------------------------------------------------------------");
         println!("MEOMOTW {:?}", self);
-        println!("ZZZZZZZ --------------------------------------------------------------------------------");
+        println!("AAAAA --------------------------------------------------------------------------------");
 */
+        if self.input.len() > NODE_SIZE.get().unwrap().clone() as usize {
+            self.main_node_overflow();
+        }
+
     }
 
     fn min_size_1(&mut self,k: Vec<Items>, count: usize) {
-
-        println!("PP {:?}", k);
+        let mut placeholder_bool = false;
         let mut temp_vector = Vec::new();
-        
         if self.input.len() < 3 {
             if k[0].key < self.input[0].key {
-                println!("{:?}", k[0].key);
                 self.children[0].lock().unwrap().input.push(k[0].clone());
                 self.children.remove(count-1);
             } else if k[0].key > self.input[self.input.len()-1].key {
-                println!("{:?}", self);
                 self.children[self.input.len()].lock().unwrap().input.push(k[0].clone());
-                // println!("ZZZZ {:?}", self);
                 self.children.remove(count-1);
             } else if k[0].key == self.input[0].key || k[0].key == self.input[self.input.len()-1].key {
                 for i in self.input.iter().cloned().collect::<Vec<Items>>() {
-                    // self.min_size_2(k.clone(), count);
-                    println!("{:?}", i);
-                    println!("Minamoto");
                     temp_vector.push(i.clone());
                 }
-            } else {
-                // This shit does absolutely nothing.
-                /*            for i in 1..self.input.len()-1 {
-                                println!("{}", self.input[i].key);
-                                if k[0].key != self.input[i].key {
-                                    println!("///////////////////////////////////////////////////////////");
-                                    println!("{:?}", k[0].key);
-                                    println!("MEow");
-                                    println!("///////////////////////////////////////////////////////////");
-                
-                                }
-                            }
-                */        }
+            }
+        } else {
+            if k[0].key == self.input[0].key || k[0].key == self.input[self.input.len()-1].key {
+                for i in self.input.iter().cloned().collect::<Vec<Items>>() {
+                    // self.min_size_2(k.clone(), count);
+                    temp_vector.push(i.clone());
+                }
+            }
         }
 
-        
-        
         for p in temp_vector.iter() {
             let mut c = 0;
             for z in self.children.iter().cloned().collect::<Vec<Arc<Mutex<Node>>>>() {
@@ -211,13 +181,12 @@ impl Node {
                 for v in z.lock().unwrap().input.iter() {
                     if p.key == v.key {
                         self.children.remove( c - 1);
+                        placeholder_bool = true;
                     }
                 }
             }
         }
-
-        println!("ZZ {:?}", self.children);
-
+        
         self.sort_children_items();
         if self.children[self.input.len()].lock().unwrap().input.len() > NODE_SIZE.get().unwrap().clone() as usize {
             self.children[self.input.len()].lock().unwrap().max_children_size_exceeded();
@@ -225,16 +194,19 @@ impl Node {
             self.children[0].lock().unwrap().max_children_size_exceeded();
         }
 
-        // Add a function that takes the last value (if single) and merges it to required function. 
-        
+
         // HACk: A random rank 1 appears inside the code, so, picked 3 keys from children for comparison for selected number
         let picked_struct = self.children[self.children.len() - 1].lock().unwrap().clone();
         let random_child = self.children[0].lock().unwrap().clone().rank;
         if picked_struct.input.len() < (NODE_SIZE.get().unwrap().clone()/2) as usize && picked_struct.rank == random_child {
-            println!("{:?}", self.children);
             self.min_size_2();
         }
+        
+        if self.input.len() > 2 {
+            self.sort_main_nodes();
+        }
         self.children_iteration();
+        
     }
     
     fn min_size_2(&mut self) {
@@ -244,7 +216,7 @@ impl Node {
         if x[0].key < self.input[0].key {
             self.children[0].lock().unwrap().input.push(x[0].clone());
         } else if x[0].key > self.input[self.input.len()-1].key {
-            self.children[self.input.len()-1].lock().unwrap().input.push(x[0].clone());
+            self.children[self.input.len()].lock().unwrap().input.push(x[0].clone());
         } else {
             for i in 0..self.input.len() - 1 {
                 if x[0].key > self.input[i].key && x[0].key < self.input[i+1].key {
@@ -253,6 +225,51 @@ impl Node {
             }
         }
         
+    }
+
+    fn main_node_overflow(&mut self) {
+        bubble_sort(&mut self.input);
+
+        let struct_one = Node::new();
+        let struct_two = Node::new();
+
+
+        struct_two.lock().unwrap().rank = struct_one.lock().unwrap().rank;
+
+        let items_size = self.input.len();
+        let breaking_point = (items_size + 1)/2;
+        let temp_storage = self.clone();
+        println!("{:?}", temp_storage.input);
+        let mut count = 0;
+        let mut i = 0;
+        self.input.clear();
+        for _v in temp_storage.input.iter() {
+            count +=1;
+
+            if count == breaking_point {
+                self.input.push(temp_storage.input[count-1].clone());
+            } else if count > breaking_point {
+                i = i + 1;
+                struct_two.lock().unwrap().input.push(temp_storage.input[count - 1].clone());
+                struct_two.lock().unwrap().input[i - 1].rank = temp_storage.rank + 1;
+            } else if count < breaking_point {
+                struct_one.lock().unwrap().input.push(temp_storage.input[count-1].clone());
+                struct_one.lock().unwrap().input[count - 1].rank = temp_storage.rank + 1;
+            }
+        }
+
+
+        self.rank = self.rank -1;
+
+        println!("AAAAA --------------------------------------------------------------------------------");
+        println!("MEOMOTW {:?}", self);
+        println!("AAAAA --------------------------------------------------------------------------------");
+
+        struct_one.lock().unwrap().rank = self.rank + 1;
+        struct_two.lock().unwrap().rank = self.rank + 1;
+        self.children.push(struct_one.clone());
+        self.children.push(struct_two.clone());
+
     }
 
     fn children_iteration(&mut self) -> () {
@@ -316,12 +333,9 @@ impl Node {
 
         let size_of_main_node = self.input.len();
 
-        // println!("ZZZZZ {:?}", self.input);
         self.input.clear();
         self.input.push(placeholder_struct.input[0].clone());
-        // println!("{:?}", self.input);
         self.sort_children_nodes();
-
 
         for i in 1..size_of_main_node {
             placeholder_struct.input[i].rank = self.input[0].rank + 1;
@@ -402,7 +416,7 @@ fn main() {
     f.lock().unwrap().insert(40, String::from("Squeak"));
     f.lock().unwrap().insert(20, String::from("Woof"));
     f.lock().unwrap().insert(45, String::from("Meow"));
-    f.lock().unwrap().insert(30, String::from("Caw-Caw"));
+/*    f.lock().unwrap().insert(30, String::from("Caw-Caw"));
     f.lock().unwrap().insert(13, String::from("Chirp"));
     f.lock().unwrap().insert(43, String::from("Ribbit"));
     f.lock().unwrap().insert(42, String::from("Purr"));
@@ -411,12 +425,16 @@ fn main() {
     f.lock().unwrap().insert(50, String::from("Oink-Oink"));
     f.lock().unwrap().insert(32, String::from("Bah"));
     f.lock().unwrap().insert(12, String::from("Mahh"));
-
-
-
+    f.lock().unwrap().insert(4, String::from("Howl"));
+    f.lock().unwrap().insert(47, String::from("Hiss"));
+    f.lock().unwrap().insert(44, String::from("Ha"));
+    f.lock().unwrap().insert(46, String::from("Hi"));
+    f.lock().unwrap().insert(5, String::from("Hi"));
+*/
     //ToDO: Combine the newly added keys to required child vector
     println!("--------------------------------------------------------------------------------");
     println!("A  {:?}", f.try_lock().unwrap().input);
+    println!("A  {:?}", f.try_lock().unwrap().rank);
     println!("--------------------------------------------------------------------------------");
     println!("B  {:?}", f.try_lock().unwrap().children);
     println!("--------------------------------------------------------------------------------");
