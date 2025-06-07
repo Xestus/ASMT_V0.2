@@ -37,6 +37,7 @@ impl Node {
         NODE_INSTANCE.fetch_add(1, Ordering::SeqCst);
         instance
     }
+    
     fn insert(&mut self, k: u8, v: String) -> () {
         let meow = self.input.len();
         if meow > 1 && !self.children.is_empty() {
