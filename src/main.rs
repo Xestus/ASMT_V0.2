@@ -1,7 +1,10 @@
+
 use std::io;
+use std::rc::Weak;
 use std::sync::{Arc, Mutex};
 use once_cell::sync::*;
 use lazy_static::lazy_static;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 
 static NODE_SIZE: OnceCell<u8> = OnceCell::new();
@@ -16,13 +19,12 @@ struct Items {
 struct Node {
     input: Vec<Items>,
     rank: u8,
-    // parent: Option<Weak<Mutex<Node>>>
+    parent: Option<Weak<Mutex<Node>>>,
     children: Vec<Arc<Mutex<Node>>>,
 }
 
-lazy_static! {
-    static ref NODE_INSTANCE: Mutex<Vec<Arc<Mutex<Node>>>> = Mutex::new(Vec::new());
-}
+static NODE_INSTANCE: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
+
 
 impl Node {
     fn new() -> Arc<Mutex<Node>> {
@@ -31,7 +33,8 @@ impl Node {
             rank: nodes_count(),
             children: Vec::new(),
         }));
-        NODE_INSTANCE.lock().unwrap().push(instance.clone());
+        // NODE_INSTANCE.lock().unwrap().push(instance.clone());
+        NODE_INSTANCE.fetch_add(1, Ordering::SeqCst);
         instance
     }
     fn insert(&mut self, k: u8, v: String) -> () {
@@ -434,7 +437,6 @@ fn main() {
     //ToDO: Combine the newly added keys to required child vector
     println!("--------------------------------------------------------------------------------");
     println!("A  {:?}", f.try_lock().unwrap().input);
-    println!("A  {:?}", f.try_lock().unwrap().rank);
     println!("--------------------------------------------------------------------------------");
     println!("B  {:?}", f.try_lock().unwrap().children);
     println!("--------------------------------------------------------------------------------");

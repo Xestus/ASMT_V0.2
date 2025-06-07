@@ -25,3 +25,6 @@ The fn responsible for adding keys that isnt less than lowest root key and highe
             
 Forced to implement a parent reference with weak but faced,
     1) `std::rc::Weak<Mutex<Node>>` cannot be sent between threads safely & found my original lazy_static! was pretty heavy.
+    
+    
+Time for mega refactor, i guess.
