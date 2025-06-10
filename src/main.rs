@@ -228,6 +228,7 @@ impl Node {
         self.print_tree_recursive("", true, 0);
     }
 
+    
     /// Recursive helper for tree printing
     fn print_tree_recursive(&self, prefix: &str, is_last: bool, depth: usize) {
         // Print current node
