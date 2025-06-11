@@ -46,6 +46,9 @@ impl Node {
 
         self.min_size_check(Node::new().lock().unwrap().clone());
         self.sort_main_nodes();
+
+        self.overflow_check();
+        self.tree_split_check();
     }
 
     fn overflow_check(&mut self) -> () {
@@ -90,6 +93,43 @@ impl Node {
         struct_two.lock().unwrap().rank = self.rank + 1;
         self.children.push(struct_one.clone());
         self.children.push(struct_two.clone());
+    }
+
+    fn tree_split_check(&mut self) -> () {
+        if self.input.len() + 1 != self.children.len() && !self.children.is_empty() {
+            self.merge_weird_splitting();
+        } else if !self.children.is_empty() {
+            for i in 0..self.children.len() {
+                self.children[i].lock().unwrap().tree_split_check();
+            }
+        }
+    }
+
+    fn merge_weird_splitting(&mut self) -> () {
+        println!("merge_weird_splitting {:?}", self);
+
+        let x = self.children[self.children.len()-2].lock().unwrap().input.len();
+        let y = self.children[self.children.len()-1].lock().unwrap().input.len();
+
+        for i in 0..x+1 {
+            self.rank_correction();
+            self.children[self.children.len()-2].lock().unwrap().children.push(self.children[0].clone());
+            self.children.remove(0);
+        }
+
+        for i in 0..y+1 {
+            self.rank_correction();
+            self.children[self.children.len()-1].lock().unwrap().children.push(self.children[0].clone());
+            self.children.remove(0);
+        }
+        
+    }
+    fn rank_correction(&mut self) {
+        self.children[0].lock().unwrap().rank = self.children[self.children.len()-1].lock().unwrap().rank + 1;
+        let k = self.children[0].lock().unwrap().input.len();
+        for j in 0..k {
+            self.children[0].lock().unwrap().input[j].rank = self.children[self.children.len()-1].lock().unwrap().rank + 1;
+        }
     }
 
     fn add_child_key(&mut self, mut x: Items) -> () {
@@ -153,7 +193,6 @@ impl Node {
 
             self.children.push(child.children[i].clone());
         }
-        println!("{:?}", child);
 
         for i in 0..self.children.len() - 1 {
             if self.children[i].lock().unwrap().input[0].key == child.input[0].key {
