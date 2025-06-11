@@ -111,13 +111,13 @@ impl Node {
         let x = self.children[self.children.len()-2].lock().unwrap().input.len();
         let y = self.children[self.children.len()-1].lock().unwrap().input.len();
 
-        for i in 0..x+1 {
+        for _i in 0..x+1 {
             self.rank_correction();
             self.children[self.children.len()-2].lock().unwrap().children.push(self.children[0].clone());
             self.children.remove(0);
         }
 
-        for i in 0..y+1 {
+        for _i in 0..y+1 {
             self.rank_correction();
             self.children[self.children.len()-1].lock().unwrap().children.push(self.children[0].clone());
             self.children.remove(0);
@@ -162,11 +162,11 @@ impl Node {
         self.sort_main_nodes();
     }
 
-    fn min_size_check(&mut self, z: Node) -> () {
+    fn min_size_check(&mut self, _z: Node) -> () {
         let meow = self.children.iter().cloned().collect::<Vec<Arc<Mutex<Node>>>>();
 
         for j in meow.clone() {
-            let mut jj = j.lock().unwrap().clone();
+            let jj = j.lock().unwrap().clone();
             if jj.input.len() < *NODE_SIZE.get().unwrap() / 2 && jj.rank > 1 {
                 self.propagate_up(jj.clone());
             } else if !jj.children.is_empty() {
@@ -209,12 +209,12 @@ impl Node {
     fn sort_main_nodes(&mut self) {
         self.input.sort_by(|a, b| {a.key.cmp(&b.key)});
     }
-    fn sort_children_items(&mut self) {
+/*    fn sort_children_items(&mut self) {
         for i in self.children.iter().cloned().collect::<Vec<Arc<Mutex<Node>>>>() {
             i.lock().unwrap().input.sort_by(|a,b| {a.key.cmp(&b.key)});
         }
     }
-
+*/
 
 }
 
