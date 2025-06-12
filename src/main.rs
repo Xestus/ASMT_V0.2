@@ -1,6 +1,10 @@
+extern crate rand;
+
 use std::sync::{Arc, Mutex};
 use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use rand::Rng;
+
 
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
@@ -44,11 +48,13 @@ impl Node {
 
         self.overflow_check();
 
-        self.min_size_check(Node::new().lock().unwrap().clone());
+        self.min_size_check();
         self.sort_main_nodes();
 
         self.overflow_check();
         self.tree_split_check();
+        self.min_size_check();
+        
     }
 
     fn overflow_check(&mut self) -> () {
@@ -93,6 +99,8 @@ impl Node {
         struct_two.lock().unwrap().rank = self.rank + 1;
         self.children.push(struct_one.clone());
         self.children.push(struct_two.clone());
+        
+        self.min_size_check();
     }
 
     fn tree_split_check(&mut self) -> () {
@@ -106,8 +114,6 @@ impl Node {
     }
 
     fn merge_weird_splitting(&mut self) -> () {
-        println!("merge_weird_splitting {:?}", self);
-
         let x = self.children[self.children.len()-2].lock().unwrap().input.len();
         let y = self.children[self.children.len()-1].lock().unwrap().input.len();
 
@@ -122,7 +128,6 @@ impl Node {
             self.children[self.children.len()-1].lock().unwrap().children.push(self.children[0].clone());
             self.children.remove(0);
         }
-        
     }
     fn rank_correction(&mut self) {
         self.children[0].lock().unwrap().rank = self.children[self.children.len()-1].lock().unwrap().rank + 1;
@@ -131,6 +136,31 @@ impl Node {
             self.children[0].lock().unwrap().input[j].rank = self.children[self.children.len()-1].lock().unwrap().rank + 1;
         }
     }
+
+/*    fn min_size_subceeded_check(&mut self) -> () {
+/*        if !self.children.is_empty() {
+            for i in 0..self.children.len() {
+                let x = self.children[i].lock().unwrap().input.len();
+                if self.children[i].lock().unwrap().input.len() < *NODE_SIZE.get().unwrap()/2 {
+                    self.min_size_subceeded(i);
+                }
+            }
+        }*/
+
+        if self.input.len() < *NODE_SIZE.get().unwrap()/2 && self.rank != 1 {
+            self.min_size_subceeded();
+        }
+    }
+
+    fn min_size_subceeded(&mut self, i: usize) -> () {
+        println!("min_size_subceeded");
+        self.children[i].lock().unwrap().rank = self.rank;
+        let child_length = self.children[i].lock().unwrap().children.len();
+
+        for j in 0..child_length {
+            self.children[i].lock().unwrap().children[j].lock().unwrap().rank = self.input[0].rank;
+        }
+    }*/
 
     fn add_child_key(&mut self, mut x: Items) -> () {
         if x.key < self.input[0].key {
@@ -162,20 +192,58 @@ impl Node {
         self.sort_main_nodes();
     }
 
-    fn min_size_check(&mut self, _z: Node) -> () {
-        let meow = self.children.iter().cloned().collect::<Vec<Arc<Mutex<Node>>>>();
-
+    fn min_size_check(&mut self) -> () {
+        // V1
+/*        let meow = self.children.iter().cloned().collect::<Vec<Arc<Mutex<Node>>>>();
         for j in meow.clone() {
-            let jj = j.lock().unwrap().clone();
+            let mut jj = j.lock().unwrap().clone();
             if jj.input.len() < *NODE_SIZE.get().unwrap() / 2 && jj.rank > 1 {
                 self.propagate_up(jj.clone());
-            } else if !jj.children.is_empty() {
+            }
+            if !jj.children.is_empty() {
                 for i in 0..jj.children.len() {
-                    jj.children[i].lock().unwrap().min_size_check(jj.clone());
+                    jj.children[i].lock().unwrap().min_size_check();
                 }
+            }
+        }*/
+
+        // V2
+/*        let mut i = 0;
+        while i < self.children.len() {
+            let child1 = self.children[i].lock().unwrap().clone();
+            
+
+            if child1.input.len() < *NODE_SIZE.get().unwrap() / 2 && child1.rank > 1 {
+                self.propagate_up(child1);
+            } else {
+                i = i+ 1;
+            }
+
+            if i < self.children.len() && !self.children[i].lock().unwrap().children.is_empty() {
+                self.children[i].lock().unwrap().min_size_check();
+            }
+        }*/
+        
+        // v3 (A bit of AI help).
+        let mut indices_to_propagate = Vec::new();
+        for (idx, child) in self.children.iter().enumerate() {
+            let child_lock = child.lock().unwrap();
+            if child_lock.input.len() < *NODE_SIZE.get().unwrap() / 2 && child_lock.rank > 1 {
+                indices_to_propagate.push(idx);
             }
         }
 
+        for &idx in indices_to_propagate.iter().rev() {
+            let child_clone = self.children[idx].lock().unwrap().clone();
+            self.propagate_up(child_clone);
+        }
+
+        for child in &self.children {
+            let mut child_lock = child.lock().unwrap();
+            if !child_lock.children.is_empty() {
+                child_lock.min_size_check();
+            }
+        }
     }
 
     fn propagate_up(&mut self, mut child: Node) {
@@ -199,6 +267,7 @@ impl Node {
                 self.children.remove(i);
             }
         }
+        self.sort_main_nodes();
         self.sort_children_nodes();
     }
 
@@ -209,55 +278,70 @@ impl Node {
     fn sort_main_nodes(&mut self) {
         self.input.sort_by(|a, b| {a.key.cmp(&b.key)});
     }
-/*    fn sort_children_items(&mut self) {
-        for i in self.children.iter().cloned().collect::<Vec<Arc<Mutex<Node>>>>() {
-            i.lock().unwrap().input.sort_by(|a,b| {a.key.cmp(&b.key)});
-        }
-    }
-*/
 
 }
 
+// TODO: Fix some child nodes having lower size than min size.
 fn main() {
 
     NODE_SIZE.set(4).expect("Failed to set size");
     let f = Node::new();
-    f.lock().unwrap().insert(100, String::from("a"));
-    f.lock().unwrap().insert(400, String::from("Squeak"));
-    f.lock().unwrap().insert(200, String::from("Woof"));
-    f.lock().unwrap().insert(450, String::from("Meow"));
-    f.lock().unwrap().insert(300, String::from("Caw-Caw"));
-    f.lock().unwrap().insert(130, String::from("Chirp"));
-    f.lock().unwrap().insert(430, String::from("Ribbit"));
-    f.lock().unwrap().insert(420, String::from("Purr"));
-    f.lock().unwrap().insert(180, String::from("Neigh"));
-    f.lock().unwrap().insert(70, String::from("Myahhh"));
-    f.lock().unwrap().insert(500, String::from("Oink-Oink"));
-    f.lock().unwrap().insert(210, String::from("a"));
-    f.lock().unwrap().insert(280, String::from("c"));
-    f.lock().unwrap().insert(320, String::from("Bah"));
-    f.lock().unwrap().insert(410, String::from("X"));
-    f.lock().unwrap().insert(460, String::from("K"));
-    f.lock().unwrap().insert(480, String::from("Hi"));
-    f.lock().unwrap().insert(490, String::from("Hiss"));
-    f.lock().unwrap().insert(440, String::from("Ha"));
-    f.lock().unwrap().insert(470, String::from("q"));
-    f.lock().unwrap().insert(120, String::from("Mahh"));
-    f.lock().unwrap().insert(40, String::from("Howl"));
-    f.lock().unwrap().insert(520, String::from("dsad"));
-    f.lock().unwrap().insert(600, String::from("juityuy"));
-    f.lock().unwrap().insert(620, String::from("Bau Bau"));
 
-    //ToDO: Combine the newly added keys to required child vector
-    println!("--------------------------------------------------------------------------------");
-    println!("A  {:?}", f.try_lock().unwrap().input);
-    println!("--------------------------------------------------------------------------------");
-    println!("B  {:?}", f.try_lock().unwrap().children);
-    println!("--------------------------------------------------------------------------------");
-    println!("A  {:?}", f);
+    f.lock().unwrap().insert(127, String::from("Woof"));
+    f.lock().unwrap().insert(543, String::from("Woof"));
+    f.lock().unwrap().insert(89, String::from("Woof"));
+    f.lock().unwrap().insert(312, String::from("Woof"));
+    f.lock().unwrap().insert(476, String::from("Woof"));
+    f.lock().unwrap().insert(25, String::from("Woof"));
+    f.lock().unwrap().insert(598, String::from("Woof"));
+    f.lock().unwrap().insert(341, String::from("Woof"));
+    f.lock().unwrap().insert(67, String::from("Woof"));
+    f.lock().unwrap().insert(429, String::from("Woof"));
+    f.lock().unwrap().insert(182, String::from("Woof"));
+    f.lock().unwrap().insert(564, String::from("Woof"));
+    f.lock().unwrap().insert(203, String::from("Woof"));
+    f.lock().unwrap().insert(497, String::from("Woof"));
+    f.lock().unwrap().insert(38, String::from("Woof"));
+    f.lock().unwrap().insert(621, String::from("Woof"));
+    f.lock().unwrap().insert(154, String::from("Woof"));
+    f.lock().unwrap().insert(287, String::from("Woof"));
+    f.lock().unwrap().insert(453, String::from("Woof"));
+    f.lock().unwrap().insert(72, String::from("Woof"));
+    f.lock().unwrap().insert(509, String::from("Woof"));
+    f.lock().unwrap().insert(236, String::from("Woof"));
+    f.lock().unwrap().insert(375, String::from("Woof"));
+    f.lock().unwrap().insert(418, String::from("Woof"));
+    f.lock().unwrap().insert(95, String::from("Woof"));
+    f.lock().unwrap().insert(582, String::from("Woof"));
+    f.lock().unwrap().insert(167, String::from("Woof"));
+    f.lock().unwrap().insert(324, String::from("Woof"));
+    f.lock().unwrap().insert(491, String::from("Woof"));
+    f.lock().unwrap().insert(53, String::from("Woof"));
+    f.lock().unwrap().insert(17, String::from("Woof"));
+    f.lock().unwrap().insert(248, String::from("Woof"));
+    f.lock().unwrap().insert(399, String::from("Woof"));
+    f.lock().unwrap().insert(521, String::from("Woof"));
+    f.lock().unwrap().insert(64, String::from("Woof"));
+    f.lock().unwrap().insert(192, String::from("Woof"));
+    // f.lock().unwrap().insert(355, String::from("Woof"));
+    // f.lock().unwrap().insert(478, String::from("Woof"));
+    // f.lock().unwrap().insert(106, String::from("Woof"));
+    // f.lock().unwrap().insert(273, String::from("Woof"));
+    // f.lock().unwrap().insert(412, String::from("Woof"));
+    // f.lock().unwrap().insert(539, String::from("Woof"));
+    // f.lock().unwrap().insert(81, String::from("Woof"));
+    // f.lock().unwrap().insert(226, String::from("Woof"));
+    // f.lock().unwrap().insert(367, String::from("Woof"));
+    // f.lock().unwrap().insert(504, String::from("Woof"));
+    // f.lock().unwrap().insert(143, String::from("Woof"));
+    // f.lock().unwrap().insert(289, String::from("Woof"));
+    // f.lock().unwrap().insert(432, String::from("Woof"));
+    // f.lock().unwrap().insert(619, String::from("Woof"));
 
     println!("{:?}", f.lock().unwrap().print_tree());
-
+/*    println!("{:?}", f.lock().unwrap().print_compact());
+    println!("{:?}", f.lock().unwrap().print_stats());
+*/
 }
 
 
