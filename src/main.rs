@@ -1,10 +1,8 @@
 extern crate rand;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use rand::Rng;
-
 
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
@@ -20,6 +18,7 @@ struct Node {
     input: Vec<Items>,
     rank: u32,
     children: Vec<Arc<Mutex<Node>>>,
+    parent: Option<Weak<Mutex<Node>>>,
 }
 
 static NODE_INSTANCE: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
@@ -32,58 +31,64 @@ impl Node {
             input: Vec::new(),
             rank: 1,
             children: Vec::new(),
+            parent: None,
         }));
         // NODE_INSTANCE.lock().unwrap().push(instance.clone());
         instance
     }
 
-    fn insert(&mut self, k: u32, v: String) -> () {
-        if !self.children.is_empty() {
-            self.add_child_key(Items {key: k, value: v.clone(), rank: self.rank});
+    fn insert(self_node: &mut Arc<Mutex<Node>>, k: u32, v: String) -> () {
+        let mut z = self_node.try_lock().unwrap();
+        let rank = z.rank;
+        if !z.children.is_empty() {
+            z.add_child_key(Items {key: k, value: v.clone(), rank});
         }
         else {
-            self.input.push(Items {key: k, value: v, rank: self.rank});
-
+            z.input.push(Items {key: k, value: v, rank});
         }
 
-        self.overflow_check();
+        z = Node::overflow_check(z);
 
-        self.min_size_check();
-        self.sort_main_nodes();
+        z = Node::min_size_check(z);
+        z.sort_main_nodes();
 
-        self.overflow_check();
-        self.tree_split_check();
-        self.min_size_check();
-        
+        z = Node::tree_split_check(z);
+
+        z = Node::min_size_check(z);
     }
 
-    fn overflow_check(&mut self) -> () {
-        if self.input.len() > *NODE_SIZE.get().unwrap() {
-            self.split_nodes();
-        } else if !self.children.is_empty() {
-            for i in 0..self.children.len() {
-                self.children[i].lock().unwrap().overflow_check();
+    fn overflow_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
+        let mut x = self_node;
+        if x.input.len() > *NODE_SIZE.get().unwrap() {
+            x = Node::split_nodes(x);
+        } else if !x.children.is_empty() {
+            for i in 0..x.children.len() {
+                let _unused = Node::overflow_check(x.children[i].lock().unwrap());
             }
         }
+        x
     }
 
-    fn split_nodes(&mut self) -> () {
-        self.sort_main_nodes();
+    fn split_nodes(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
+        let mut self_instance = self_node;
+
+        self_instance.sort_main_nodes();
 
         let struct_one = Node::new();
         let struct_two = Node::new();
 
-        let items_size = self.input.len();
+
+        let items_size = self_instance.input.len();
         let breaking_point = (items_size + 1)/2;
-        let temp_storage = self.clone();
+        let temp_storage = self_instance.clone();
         let mut count = 0;
         let mut i = 0;
-        self.input.clear();
+        self_instance.input.clear();
         for _v in temp_storage.input.iter() {
             count +=1;
 
             if count == breaking_point {
-                self.input.push(temp_storage.input[count-1].clone());
+                self_instance.input.push(temp_storage.input[count-1].clone());
             } else if count > breaking_point {
                 i = i + 1;
                 struct_two.lock().unwrap().input.push(temp_storage.input[count - 1].clone());
@@ -95,45 +100,57 @@ impl Node {
         }
 
 
-        struct_one.lock().unwrap().rank = self.rank + 1;
-        struct_two.lock().unwrap().rank = self.rank + 1;
-        self.children.push(struct_one.clone());
-        self.children.push(struct_two.clone());
+        struct_one.lock().unwrap().rank = self_instance.rank + 1;
+        struct_two.lock().unwrap().rank = self_instance.rank + 1;
         
-        self.min_size_check();
+        // struct_one.lock().unwrap().parent = Some(Arc::downgrade(&Arc::new(self_instance)));
+        self_instance.children.push(struct_one.clone());
+        self_instance.children.push(struct_two.clone());
+        
+        // self.min_size_check();
+
+        self_instance
     }
 
-    fn tree_split_check(&mut self) -> () {
-        if self.input.len() + 1 != self.children.len() && !self.children.is_empty() {
-            self.merge_weird_splitting();
-        } else if !self.children.is_empty() {
-            for i in 0..self.children.len() {
-                self.children[i].lock().unwrap().tree_split_check();
+    fn tree_split_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
+        let mut self_instance = self_node;
+        if self_instance.input.len() + 1 != self_instance.children.len() && !self_instance.children.is_empty() {
+            self_instance = Node::merge_weird_splitting(self_instance);
+
+        } else if !self_instance.children.is_empty() {
+            for i in 0..self_instance.children.len() {
+                Node::tree_split_check(self_instance.children[i].lock().unwrap());
             }
         }
+
+        self_instance
     }
 
-    fn merge_weird_splitting(&mut self) -> () {
-        let x = self.children[self.children.len()-2].lock().unwrap().input.len();
-        let y = self.children[self.children.len()-1].lock().unwrap().input.len();
+    fn merge_weird_splitting(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
+        let mut self_instance = self_node;
+        let x = self_instance.children[self_instance.children.len()-2].lock().unwrap().input.len();
+        let y = self_instance.children[self_instance.children.len()-1].lock().unwrap().input.len();
 
         for _i in 0..x+1 {
-            self.rank_correction();
-            self.children[self.children.len()-2].lock().unwrap().children.push(self.children[0].clone());
-            self.children.remove(0);
+            // self_instance.rank_correction();
+            Node::rank_correction(&mut self_instance);
+            self_instance.children[self_instance.children.len()-2].lock().unwrap().children.push(self_instance.children[0].clone());
+            self_instance.children.remove(0);
         }
 
         for _i in 0..y+1 {
-            self.rank_correction();
-            self.children[self.children.len()-1].lock().unwrap().children.push(self.children[0].clone());
-            self.children.remove(0);
+            // self_instance.rank_correction();
+            self_instance.children[self_instance.children.len()-1].lock().unwrap().children.push(self_instance.children[0].clone());
+            self_instance.children.remove(0);
         }
+
+        self_instance
     }
-    fn rank_correction(&mut self) {
-        self.children[0].lock().unwrap().rank = self.children[self.children.len()-1].lock().unwrap().rank + 1;
-        let k = self.children[0].lock().unwrap().input.len();
+    fn rank_correction(self_instance: &mut MutexGuard<Node>) {
+        self_instance.children[0].lock().unwrap().rank = self_instance.children[self_instance.children.len()-1].lock().unwrap().rank + 1;
+        let k = self_instance.children[0].lock().unwrap().input.len();
         for j in 0..k {
-            self.children[0].lock().unwrap().input[j].rank = self.children[self.children.len()-1].lock().unwrap().rank + 1;
+            self_instance.children[0].lock().unwrap().input[j].rank = self_instance.children[self_instance.children.len()-1].lock().unwrap().rank + 1;
         }
     }
 
@@ -192,41 +209,12 @@ impl Node {
         self.sort_main_nodes();
     }
 
-    fn min_size_check(&mut self) -> () {
-        // V1
-/*        let meow = self.children.iter().cloned().collect::<Vec<Arc<Mutex<Node>>>>();
-        for j in meow.clone() {
-            let mut jj = j.lock().unwrap().clone();
-            if jj.input.len() < *NODE_SIZE.get().unwrap() / 2 && jj.rank > 1 {
-                self.propagate_up(jj.clone());
-            }
-            if !jj.children.is_empty() {
-                for i in 0..jj.children.len() {
-                    jj.children[i].lock().unwrap().min_size_check();
-                }
-            }
-        }*/
+    fn min_size_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
 
-        // V2
-/*        let mut i = 0;
-        while i < self.children.len() {
-            let child1 = self.children[i].lock().unwrap().clone();
-            
+        let mut x = self_node;
 
-            if child1.input.len() < *NODE_SIZE.get().unwrap() / 2 && child1.rank > 1 {
-                self.propagate_up(child1);
-            } else {
-                i = i+ 1;
-            }
-
-            if i < self.children.len() && !self.children[i].lock().unwrap().children.is_empty() {
-                self.children[i].lock().unwrap().min_size_check();
-            }
-        }*/
-        
-        // v3 (A bit of AI help).
         let mut indices_to_propagate = Vec::new();
-        for (idx, child) in self.children.iter().enumerate() {
+        for (idx, child) in x.children.iter().enumerate() {
             let child_lock = child.lock().unwrap();
             if child_lock.input.len() < *NODE_SIZE.get().unwrap() / 2 && child_lock.rank > 1 {
                 indices_to_propagate.push(idx);
@@ -234,41 +222,46 @@ impl Node {
         }
 
         for &idx in indices_to_propagate.iter().rev() {
-            let child_clone = self.children[idx].lock().unwrap().clone();
-            self.propagate_up(child_clone);
+            let child_clone = x.children[idx].lock().unwrap().clone();
+            x = Node::propagate_up(x, child_clone);
         }
 
-        for child in &self.children {
+        for child in &x.children {
             let mut child_lock = child.lock().unwrap();
             if !child_lock.children.is_empty() {
-                child_lock.min_size_check();
+                Node::min_size_check(child_lock);
             }
         }
+
+        x
     }
 
-    fn propagate_up(&mut self, mut child: Node) {
+    fn propagate_up(self_node: MutexGuard<Node>, mut child: Node) -> MutexGuard<Node> {
+        let mut x = self_node;
         for i in 0..child.input.len() {
-            child.input[i].rank = self.input[0].rank;
-            self.input.push(child.input[i].clone());
+            child.input[i].rank = x.input[0].rank;
+            x.input.push(child.input[i].clone());
         }
         for i in 0..child.children.len() {
-            child.children[i].lock().unwrap().rank = self.children[0].lock().unwrap().rank;
+            child.children[i].lock().unwrap().rank = x.children[0].lock().unwrap().rank;
             let k = child.children[i].lock().unwrap().input.len();
 
             for j in 0..k {
-                child.children[i].lock().unwrap().input[j].rank = self.children[0].lock().unwrap().rank;
+                child.children[i].lock().unwrap().input[j].rank = x.children[0].lock().unwrap().rank;
             }
 
-            self.children.push(child.children[i].clone());
+            x.children.push(child.children[i].clone());
         }
 
-        for i in 0..self.children.len() - 1 {
-            if self.children[i].lock().unwrap().input[0].key == child.input[0].key {
-                self.children.remove(i);
+        for i in 0..x.children.len() - 1 {
+            if x.children[i].lock().unwrap().input[0].key == child.input[0].key {
+                x.children.remove(i);
             }
         }
-        self.sort_main_nodes();
-        self.sort_children_nodes();
+        x.sort_main_nodes();
+        x.sort_children_nodes();
+
+        x
     }
 
 
@@ -285,44 +278,46 @@ impl Node {
 fn main() {
 
     NODE_SIZE.set(4).expect("Failed to set size");
-    let f = Node::new();
+    let mut f = Node::new();
 
-    f.lock().unwrap().insert(127, String::from("Woof"));
-    f.lock().unwrap().insert(543, String::from("Woof"));
-    f.lock().unwrap().insert(89, String::from("Woof"));
-    f.lock().unwrap().insert(312, String::from("Woof"));
-    f.lock().unwrap().insert(476, String::from("Woof"));
-    f.lock().unwrap().insert(25, String::from("Woof"));
-    f.lock().unwrap().insert(598, String::from("Woof"));
-    f.lock().unwrap().insert(341, String::from("Woof"));
-    f.lock().unwrap().insert(67, String::from("Woof"));
-    f.lock().unwrap().insert(429, String::from("Woof"));
-    f.lock().unwrap().insert(182, String::from("Woof"));
-    f.lock().unwrap().insert(564, String::from("Woof"));
-    f.lock().unwrap().insert(203, String::from("Woof"));
-    f.lock().unwrap().insert(497, String::from("Woof"));
-    f.lock().unwrap().insert(38, String::from("Woof"));
-    f.lock().unwrap().insert(621, String::from("Woof"));
-    f.lock().unwrap().insert(154, String::from("Woof"));
-    f.lock().unwrap().insert(287, String::from("Woof"));
-    f.lock().unwrap().insert(453, String::from("Woof"));
-    f.lock().unwrap().insert(72, String::from("Woof"));
-    f.lock().unwrap().insert(509, String::from("Woof"));
-    f.lock().unwrap().insert(236, String::from("Woof"));
-    f.lock().unwrap().insert(375, String::from("Woof"));
-    f.lock().unwrap().insert(418, String::from("Woof"));
-    f.lock().unwrap().insert(95, String::from("Woof"));
-    f.lock().unwrap().insert(582, String::from("Woof"));
-    f.lock().unwrap().insert(167, String::from("Woof"));
-    f.lock().unwrap().insert(324, String::from("Woof"));
-    f.lock().unwrap().insert(491, String::from("Woof"));
-    f.lock().unwrap().insert(53, String::from("Woof"));
-    f.lock().unwrap().insert(17, String::from("Woof"));
-    f.lock().unwrap().insert(248, String::from("Woof"));
-    f.lock().unwrap().insert(399, String::from("Woof"));
-    f.lock().unwrap().insert(521, String::from("Woof"));
-    f.lock().unwrap().insert(64, String::from("Woof"));
-    f.lock().unwrap().insert(192, String::from("Woof"));
+    Node::insert(&mut f,127, String::from("Woof"));
+
+    Node::insert(&mut f, 127, String::from("Woof"));
+    Node::insert(&mut f, 543, String::from("Woof"));
+    Node::insert(&mut f, 89, String::from("Woof"));
+    Node::insert(&mut f, 312, String::from("Woof"));
+    Node::insert(&mut f, 476, String::from("Woof"));
+    Node::insert(&mut f, 25, String::from("Woof"));
+    Node::insert(&mut f, 598, String::from("Woof"));
+    Node::insert(&mut f, 341, String::from("Woof"));
+    Node::insert(&mut f, 67, String::from("Woof"));
+    Node::insert(&mut f, 429, String::from("Woof"));
+    Node::insert(&mut f, 182, String::from("Woof"));
+    Node::insert(&mut f, 564, String::from("Woof"));
+    Node::insert(&mut f, 203, String::from("Woof"));
+    Node::insert(&mut f, 497, String::from("Woof"));
+    Node::insert(&mut f, 38, String::from("Woof"));
+    Node::insert(&mut f, 621, String::from("Woof"));
+    Node::insert(&mut f, 154, String::from("Woof"));
+    Node::insert(&mut f, 287, String::from("Woof"));
+    Node::insert(&mut f, 453, String::from("Woof"));
+    Node::insert(&mut f, 72, String::from("Woof"));
+    Node::insert(&mut f, 509, String::from("Woof"));
+    Node::insert(&mut f, 236, String::from("Woof"));
+    Node::insert(&mut f, 375, String::from("Woof"));
+    Node::insert(&mut f, 418, String::from("Woof"));
+    Node::insert(&mut f, 95, String::from("Woof"));
+    Node::insert(&mut f, 582, String::from("Woof"));
+    Node::insert(&mut f, 167, String::from("Woof"));
+    Node::insert(&mut f, 324, String::from("Woof"));
+    Node::insert(&mut f, 491, String::from("Woof"));
+    Node::insert(&mut f, 53, String::from("Woof"));
+    Node::insert(&mut f, 17, String::from("Woof"));
+    Node::insert(&mut f, 248, String::from("Woof"));
+    Node::insert(&mut f, 399, String::from("Woof"));
+    Node::insert(&mut f, 521, String::from("Woof"));
+    Node::insert(&mut f, 64, String::from("Woof"));
+    Node::insert(&mut f, 192, String::from("Woof"));
     // f.lock().unwrap().insert(355, String::from("Woof"));
     // f.lock().unwrap().insert(478, String::from("Woof"));
     // f.lock().unwrap().insert(106, String::from("Woof"));
