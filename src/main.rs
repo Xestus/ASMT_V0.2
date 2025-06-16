@@ -63,12 +63,14 @@ impl Node {
         
         z = Node::tree_split_check(z);
 
-         Node::rank_correction(z);
-        
+        z = Node::rank_correction(z);
+
+        z = Node::sort_everything(z);
         // z = Node::min_size_check(z);
 
         // z = Node::tree_split_check(z);
 
+        
     }
 
     fn overflow_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
@@ -171,7 +173,7 @@ impl Node {
 
         let x = self_instance.children[self_instance.children.len()-2].lock().unwrap().input.len();
         let y = self_instance.children[self_instance.children.len()-1].lock().unwrap().input.len();
-        
+
         // HACK: only selected the children with no children of their own to be added under new node.
         for _i in 0..x+1 {
             let mut p = 0;
@@ -188,7 +190,7 @@ impl Node {
             let mut p = 0;
             while !self_instance.children[p].lock().unwrap().children.is_empty() {
                 p = p + 1;
-            }           
+            }
             // Node::rank_correction(&mut self_instance);
 
             self_instance.children[self_instance.children.len()-1].lock().unwrap().children.push(self_instance.children[p].clone());
@@ -197,7 +199,7 @@ impl Node {
 
         self_instance
     }
-    fn rank_correction(self_node: MutexGuard<Node>) {
+    fn rank_correction(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
 /*        let child_size = self_instance.children.len();
         let rank_tbc = self_instance.children[self_instance.children.len()-1].lock().unwrap().rank + 1;
         // let rank_tbc = self_instance.rank + 2;
@@ -214,8 +216,9 @@ impl Node {
         for j in 0..k {
             self_instance.children[0].lock().unwrap().input[j].rank = self_instance.children[self_instance.children.len()-1].lock().unwrap().rank + 1;
         }*/
-        let self_instance = self_node;
-        
+        let mut self_instance = self_node;
+        self_instance.sort_main_nodes();
+
         if !self_instance.children.is_empty() {
             for i in 0..self_instance.children.len() {
                 self_instance.children[i].lock().unwrap().rank = self_instance.rank + 1;
@@ -227,7 +230,7 @@ impl Node {
             }
         }
 
-        // self_instance
+        self_instance
     }
 
 /*    fn min_size_subceeded_check(&mut self) -> () {
@@ -345,6 +348,20 @@ impl Node {
     fn sort_main_nodes(&mut self) {
         self.input.sort_by(|a, b| {a.key.cmp(&b.key)});
     }
+    fn sort_everything(node: MutexGuard<Node>) -> MutexGuard<Node> {
+        let mut current_node = node;
+        current_node.sort_main_nodes();
+
+        current_node.sort_children_nodes();
+
+        let children = current_node.clone().children;
+        
+        for i in 0..children.len() {
+            Node::sort_everything(children[i].lock().unwrap());
+        }
+        
+        current_node
+    }
 
 }
 
@@ -393,19 +410,19 @@ fn main() {
     Node::insert(&mut f, 64, String::from("Woof"));
     Node::insert(&mut f, 192, String::from("Woof"));
     Node::insert(&mut f, 355, String::from("Woof"));
-    // Node::insert(&mut f, 478, String::from("Woof"));
-    // Node::insert(&mut f, 106, String::from("Woof"));
-    // Node::insert(&mut f, 273, String::from("Woof"));
-    // Node::insert(&mut f, 412, String::from("Woof"));
-    // Node::insert(&mut f, 539, String::from("Woof"));
-    // Node::insert(&mut f, 81, String::from("Woof"));
-    // Node::insert(&mut f, 226, String::from("Woof"));
-    // Node::insert(&mut f, 367, String::from("Woof"));
-    // Node::insert(&mut f, 504, String::from("Woof"));
-    // Node::insert(&mut f, 143, String::from("Woof"));
-    // Node::insert(&mut f, 289, String::from("Woof"));
-    // Node::insert(&mut f, 432, String::from("Woof"));
-    // Node::insert(&mut f, 619, String::from("Woof"));
+    Node::insert(&mut f, 478, String::from("Woof"));
+    Node::insert(&mut f, 106, String::from("Woof"));
+    Node::insert(&mut f, 273, String::from("Woof"));
+    Node::insert(&mut f, 412, String::from("Woof"));
+    Node::insert(&mut f, 539, String::from("Woof"));
+    Node::insert(&mut f, 81, String::from("Woof"));
+    Node::insert(&mut f, 226, String::from("Woof"));
+    Node::insert(&mut f, 367, String::from("Woof"));
+    Node::insert(&mut f, 504, String::from("Woof"));
+    Node::insert(&mut f, 143, String::from("Woof"));
+    Node::insert(&mut f, 289, String::from("Woof"));
+    Node::insert(&mut f, 432, String::from("Woof"));
+    Node::insert(&mut f, 619, String::from("Woof"));
 
     println!("{:?}", f.lock().unwrap().print_tree());
 /*    println!("{:?}", f.lock().unwrap().print_compact());
