@@ -63,6 +63,8 @@ impl Node {
         
         z = Node::tree_split_check(z);
 
+         Node::rank_correction(z);
+        
         // z = Node::min_size_check(z);
 
         // z = Node::tree_split_check(z);
@@ -140,15 +142,15 @@ impl Node {
 
     fn merge_weird_splitting(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut self_instance = self_node;
-        // HACK: Go through all instance of node and pick thenode input where node whose lowest value is lesser than X's lowest val & 
+        // HACK: Go through all instance of node and pick thenode input where node whose lowest value is lesser than X's lowest val &
         // highest value is higher than X's highest value. It should be duplicated and removed. And let the following function progress.
-        
+
         let child_len = self_instance.children.len();
         for i in 0..child_len {
             let some_val = self_instance.children[i].lock().unwrap().clone().input;
             let k = self_instance.children[i].clone();
             let keys_primary_required = vec![some_val[0].key, some_val[some_val.len() - 1].key];
-            
+
             for j in 0..child_len {
                 let some_other_val = self_instance.children[j].lock().unwrap().clone().input;
                 let keys_secondary_required = vec![some_other_val[0].key, some_other_val[some_other_val.len() - 1].key];
@@ -166,38 +168,36 @@ impl Node {
             let last_two = &mut self_instance.children[len-2..];
             last_two.sort_by(|a, b| { a.lock().unwrap().input[0].key.cmp(&b.lock().unwrap().input[0].key) });
         }
-        
-        println!("{:?}", self_instance.print_tree());
-        
+
         let x = self_instance.children[self_instance.children.len()-2].lock().unwrap().input.len();
         let y = self_instance.children[self_instance.children.len()-1].lock().unwrap().input.len();
-
+        
         // HACK: only selected the children with no children of their own to be added under new node.
         for _i in 0..x+1 {
-            Node::rank_correction(&mut self_instance);
             let mut p = 0;
             while !self_instance.children[p].lock().unwrap().children.is_empty() {
                 p = p + 1;
             }
-            
+            // Node::rank_correction(&mut self_instance);
+
             self_instance.children[self_instance.children.len()-2].lock().unwrap().children.push(self_instance.children[p].clone());
             self_instance.children.remove(p);
-
         }
 
         for _i in 0..y+1 {
-            Node::rank_correction(&mut self_instance);
             let mut p = 0;
             while !self_instance.children[p].lock().unwrap().children.is_empty() {
                 p = p + 1;
-            }
+            }           
+            // Node::rank_correction(&mut self_instance);
+
             self_instance.children[self_instance.children.len()-1].lock().unwrap().children.push(self_instance.children[p].clone());
             self_instance.children.remove(p);
         }
 
         self_instance
     }
-    fn rank_correction(self_instance: &mut MutexGuard<Node>) {
+    fn rank_correction(self_node: MutexGuard<Node>) {
 /*        let child_size = self_instance.children.len();
         let rank_tbc = self_instance.children[self_instance.children.len()-1].lock().unwrap().rank + 1;
         // let rank_tbc = self_instance.rank + 2;
@@ -209,12 +209,25 @@ impl Node {
                 self_instance.children[i].lock().unwrap().input[j].rank = rank_tbc;
             }
         }*/
-
-        self_instance.children[0].lock().unwrap().rank = self_instance.children[self_instance.children.len()-1].lock().unwrap().rank + 1;
+/*        self_instance.children[0].lock().unwrap().rank = self_instance.children[self_instance.children.len()-1].lock().unwrap().rank + 1;
         let k = self_instance.children[0].lock().unwrap().input.len();
         for j in 0..k {
             self_instance.children[0].lock().unwrap().input[j].rank = self_instance.children[self_instance.children.len()-1].lock().unwrap().rank + 1;
+        }*/
+        let self_instance = self_node;
+        
+        if !self_instance.children.is_empty() {
+            for i in 0..self_instance.children.len() {
+                self_instance.children[i].lock().unwrap().rank = self_instance.rank + 1;
+                let len = self_instance.children[i].lock().unwrap().input.len();
+                for j in 0..len {
+                    self_instance.children[i].lock().unwrap().input[j].rank = self_instance.rank + 1;
+                }
+                Node::rank_correction(self_instance.children[i].lock().unwrap());
+            }
         }
+
+        // self_instance
     }
 
 /*    fn min_size_subceeded_check(&mut self) -> () {
