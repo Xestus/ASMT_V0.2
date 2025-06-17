@@ -3,7 +3,7 @@ extern crate rand;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
-
+use rand::Rng;
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
 
@@ -131,6 +131,10 @@ impl Node {
     fn tree_split_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut self_instance = self_node;
         if self_instance.input.len() + 1 != self_instance.children.len() && !self_instance.children.is_empty() {
+            println!("---------------------------------------------------------------------------");
+            println!("{:?}// {:?}", self_instance.input.len(), self_instance.children.len());
+            println!("{:?}", self_instance.print_tree());
+            println!("---------------------------------------------------------------------------");
             self_instance = Node::merge_weird_splitting(self_instance);
 
         } else if !self_instance.children.is_empty() {
@@ -175,24 +179,37 @@ impl Node {
         let y = self_instance.children[self_instance.children.len()-1].lock().unwrap().input.len();
 
         // HACK: only selected the children with no children of their own to be added under new node.
+        // TODO: Hank no work as most of the time, you need to merge childrens with childrens.
+        
         for _i in 0..x+1 {
             let mut p = 0;
+            println!("{:?}", self_instance.children.len());
+            println!("ZZ {:?}", self_instance.print_tree());
+
             while !self_instance.children[p].lock().unwrap().children.is_empty() {
                 p = p + 1;
-            }
-            // Node::rank_correction(&mut self_instance);
 
-            self_instance.children[self_instance.children.len()-2].lock().unwrap().children.push(self_instance.children[p].clone());
+                if self_instance.children.len() -2 == p {
+                    p = 0;
+                    break;
+                }
+            }
+            
+            let temp = self_instance.children[p].lock().unwrap().clone();
+            self_instance.children[self_instance.children.len()-2].lock().unwrap().children.push(Arc::new(Mutex::new(temp)));
             self_instance.children.remove(p);
+
         }
 
         for _i in 0..y+1 {
             let mut p = 0;
             while !self_instance.children[p].lock().unwrap().children.is_empty() {
                 p = p + 1;
+                if self_instance.children.len() -2 == p {
+                    p = 0;
+                    break;
+                }
             }
-            // Node::rank_correction(&mut self_instance);
-
             self_instance.children[self_instance.children.len()-1].lock().unwrap().children.push(self_instance.children[p].clone());
             self_instance.children.remove(p);
         }
@@ -365,69 +382,16 @@ impl Node {
 
 }
 
-// TODO: Fix some child nodes having lower size than min size.
 fn main() {
 
     NODE_SIZE.set(4).expect("Failed to set size");
     let mut f = Node::new();
-
-    Node::insert(&mut f,127, String::from("Woof"));
-
-    Node::insert(&mut f, 127, String::from("Woof"));
-    Node::insert(&mut f, 543, String::from("Woof"));
-    Node::insert(&mut f, 89, String::from("Woof"));
-    Node::insert(&mut f, 312, String::from("Woof"));
-    Node::insert(&mut f, 476, String::from("Woof"));
-    Node::insert(&mut f, 25, String::from("Woof"));
-    Node::insert(&mut f, 598, String::from("Woof"));
-    Node::insert(&mut f, 341, String::from("Woof"));
-    Node::insert(&mut f, 67, String::from("Woof"));
-    Node::insert(&mut f, 429, String::from("Woof"));
-    Node::insert(&mut f, 182, String::from("Woof"));
-    Node::insert(&mut f, 564, String::from("Woof"));
-    Node::insert(&mut f, 203, String::from("Woof"));
-    Node::insert(&mut f, 497, String::from("Woof"));
-    Node::insert(&mut f, 38, String::from("Woof"));
-    Node::insert(&mut f, 621, String::from("Woof"));
-    Node::insert(&mut f, 154, String::from("Woof"));
-    Node::insert(&mut f, 287, String::from("Woof"));
-    Node::insert(&mut f, 453, String::from("Woof"));
-    Node::insert(&mut f, 72, String::from("Woof"));
-    Node::insert(&mut f, 509, String::from("Woof"));
-    Node::insert(&mut f, 236, String::from("Woof"));
-    Node::insert(&mut f, 375, String::from("Woof"));
-    Node::insert(&mut f, 418, String::from("Woof"));
-    Node::insert(&mut f, 95, String::from("Woof"));
-    Node::insert(&mut f, 582, String::from("Woof"));
-    Node::insert(&mut f, 167, String::from("Woof"));
-    Node::insert(&mut f, 324, String::from("Woof"));
-    Node::insert(&mut f, 491, String::from("Woof"));
-    Node::insert(&mut f, 53, String::from("Woof"));
-    Node::insert(&mut f, 17, String::from("Woof"));
-    Node::insert(&mut f, 248, String::from("Woof"));
-    Node::insert(&mut f, 399, String::from("Woof"));
-    Node::insert(&mut f, 521, String::from("Woof"));
-    Node::insert(&mut f, 64, String::from("Woof"));
-    Node::insert(&mut f, 192, String::from("Woof"));
-    Node::insert(&mut f, 355, String::from("Woof"));
-    Node::insert(&mut f, 478, String::from("Woof"));
-    Node::insert(&mut f, 106, String::from("Woof"));
-    Node::insert(&mut f, 273, String::from("Woof"));
-    Node::insert(&mut f, 412, String::from("Woof"));
-    Node::insert(&mut f, 539, String::from("Woof"));
-    Node::insert(&mut f, 81, String::from("Woof"));
-    Node::insert(&mut f, 226, String::from("Woof"));
-    Node::insert(&mut f, 367, String::from("Woof"));
-    Node::insert(&mut f, 504, String::from("Woof"));
-    Node::insert(&mut f, 143, String::from("Woof"));
-    Node::insert(&mut f, 289, String::from("Woof"));
-    Node::insert(&mut f, 432, String::from("Woof"));
-    Node::insert(&mut f, 619, String::from("Woof"));
-
+    for i in 0..200 {
+        let sec = rand::thread_rng().gen_range(1, 1000);
+        Node::insert(&mut f, sec, String::from("Woof"));
+    }
+    
     println!("{:?}", f.lock().unwrap().print_tree());
-/*    println!("{:?}", f.lock().unwrap().print_compact());
-    println!("{:?}", f.lock().unwrap().print_stats());
-*/
 }
 
 
