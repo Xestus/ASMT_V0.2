@@ -332,9 +332,7 @@ impl Node {
     }
 
     fn key_position(node: Arc<Mutex<Node>>, key: u32) -> Option<Items> {
-        println!("{:?}", node.lock().unwrap().print_tree());
         let mut node_instance = node.lock().unwrap();
-
         for i in 0..node_instance.input.len() {
             if node_instance.input[i].key == key {
                 return Some(node_instance.input[i].clone());
@@ -355,6 +353,32 @@ impl Node {
 
         None
     }
+    pub fn remove_key(&mut self, key: u32) {
+        let x = self.clone();
+        // let mut node_instance = node.lock().unwrap();
+        let mut child_removed = false;
+        for i in 0..self.input.len() {
+            if self.input[i].key == key {
+                child_removed = true;
+                self.input.remove(i);
+            }
+        }
+
+        if !child_removed {
+            if key < self.input[0].key {
+                return self.children[0].lock().unwrap().remove_key(key);
+            } else if key > self.input[self.input.len()-1].key {
+                return self.children[self.children.len()-1].lock().unwrap().remove_key(key);
+            } else {
+                for i in 0..self.input.len() - 1 {
+                    if key > self.input[i].key && key < self.input[i+1].key {
+                        return self.children[i+1].lock().unwrap().remove_key(key);
+                    }
+                }
+            }
+        }
+        
+    }
 }
 
 fn main() {
@@ -371,16 +395,21 @@ fn main() {
     
     println!("{:?}", f.lock().unwrap().print_tree());
 
-    println!("Key to be discovered?");
+/*    println!("Key to be discovered?");
     let required_key = read_num();
-    
-    match Node::key_position(f,required_key) {
+
+    match Node::key_position(f.clone(),required_key) {
         Some(x) => {
             println!("Key found");
             println!("{:?}", x);
         }
         None => println!("Key not found"),
-    }
+    }*/
+
+    println!("Keys to be deleted?");
+    let required_key = read_num();
+    f.lock().unwrap().remove_key(required_key);
+    println!("{:?}", f.lock().unwrap().print_tree());
 }
 
 
