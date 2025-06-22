@@ -1,5 +1,7 @@
 extern crate rand;
 
+use std::io;
+use std::ptr::read;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -66,7 +68,6 @@ impl Node {
         z.sort_everything();
 
     }
-
     fn overflow_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut x = self_node;
         if x.input.len() > *NODE_SIZE.get().unwrap() {
@@ -78,7 +79,6 @@ impl Node {
         }
         x
     }
-
     fn split_nodes(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut self_instance = self_node;
 
@@ -119,7 +119,6 @@ impl Node {
         
         self_instance
     }
-
     fn tree_split_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut self_instance = self_node;
         if self_instance.input.len() + 1 != self_instance.children.len() && !self_instance.children.is_empty() {
@@ -133,7 +132,6 @@ impl Node {
 
         self_instance
     }
-
     fn merge_weird_splitting(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         
         // TODO: So the issue is that the nodes split and take pre existing nodes. Hence, create a iterator which goes thru the required number and parent node, selects the count where it lands.
@@ -233,7 +231,6 @@ impl Node {
 
         self_instance
     }
-
     fn add_child_key(&mut self, mut x: Items) -> () {
         if x.key < self.input[0].key {
             if !self.children.is_empty() {
@@ -263,7 +260,6 @@ impl Node {
         }
         self.sort_main_nodes();
     }
-
     fn min_size_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
 
         let mut x = self_node;
@@ -290,7 +286,6 @@ impl Node {
         
         x
     }
-
     fn propagate_up(self_node: MutexGuard<Node>, mut child: Node) -> MutexGuard<Node> {
         let mut x = self_node;
         for i in 0..child.input.len() {
@@ -335,6 +330,31 @@ impl Node {
             child_guard.sort_everything();
         }
     }
+
+    fn key_position(node: Arc<Mutex<Node>>, key: u32) -> Option<Items> {
+        println!("{:?}", node.lock().unwrap().print_tree());
+        let mut node_instance = node.lock().unwrap();
+
+        for i in 0..node_instance.input.len() {
+            if node_instance.input[i].key == key {
+                return Some(node_instance.input[i].clone());
+            }
+        }
+
+        if key < node_instance.input[0].key {
+            return Node::key_position(node_instance.children[0].clone(), key);
+        } else if key > node_instance.input[node_instance.input.len()-1].key {
+            return Node::key_position(node_instance.children[node_instance.children.len()-1].clone(), key);
+        } else {
+            for i in 0..node_instance.input.len() - 1 {
+                if key > node_instance.input[i].key && key < node_instance.input[i+1].key {
+                    return Node::key_position(node_instance.children[i+1].clone(), key);
+                }
+            }
+        }
+
+        None
+    }
 }
 
 fn main() {
@@ -342,17 +362,39 @@ fn main() {
     NODE_SIZE.set(4).expect("Failed to set size");
     let mut f = Node::new();
     let mut c = 0;
-    for i in 0..100_000 {
-        let sec = rand::thread_rng().gen_range(1, 300_000);
+    for i in 0..100 {
+        let sec = rand::thread_rng().gen_range(1, 1000);
         Node::insert(&mut f, sec, String::from("Woof"));
         c = c + 1;
         println!("{:?}", c);
     }
     
     println!("{:?}", f.lock().unwrap().print_tree());
-    println!("Count: {}", c);
+
+    println!("Key to be discovered?");
+    let required_key = read_num();
+    
+    match Node::key_position(f,required_key) {
+        Some(x) => {
+            println!("Key found");
+            println!("{:?}", x);
+        }
+        None => println!("Key not found"),
+    }
 }
 
+
+fn read_num() -> u32 {
+    let mut inp = String::new();
+    io::stdin().read_line(&mut inp).expect("Failed to read line");
+    let n = inp.trim().parse().expect("Not a number");
+    n
+}
+fn read_string() -> String {
+    let mut inp = String::new();
+    io::stdin().read_line(&mut inp).expect("Failed to read line");
+    inp.trim().to_string()
+}
 
 impl Node {
     /// Pretty print the entire tree starting from this node
