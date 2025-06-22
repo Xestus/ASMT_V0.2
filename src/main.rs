@@ -312,24 +312,6 @@ impl Node {
         x.sort_children_nodes();
         x
     }
-    
-    fn sort_children_nodes(&mut self) {
-        self.children.sort_by(|a, b| {a.lock().unwrap().input[0].key.cmp(&b.lock().unwrap().input[0].key)});
-    }
-    fn sort_main_nodes(&mut self) {
-        self.input.sort_by(|a, b| {a.key.cmp(&b.key)});
-    }
-    fn sort_everything(&mut self) {
-        self.sort_main_nodes();
-        self.sort_children_nodes();
-
-        let children: Vec<Arc<Mutex<Node>>> = self.children.clone();
-
-        for child in children {
-            let mut child_guard = child.lock().unwrap();
-            child_guard.sort_everything();
-        }
-    }
 
     fn key_position(node: Arc<Mutex<Node>>, key: u32) -> Option<Items> {
         let mut node_instance = node.lock().unwrap();
@@ -353,31 +335,23 @@ impl Node {
 
         None
     }
-    pub fn remove_key(&mut self, key: u32) {
-        let x = self.clone();
-        // let mut node_instance = node.lock().unwrap();
-        let mut child_removed = false;
-        for i in 0..self.input.len() {
-            if self.input[i].key == key {
-                child_removed = true;
-                self.input.remove(i);
-            }
-        }
+    
+    fn sort_children_nodes(&mut self) {
+        self.children.sort_by(|a, b| {a.lock().unwrap().input[0].key.cmp(&b.lock().unwrap().input[0].key)});
+    }
+    fn sort_main_nodes(&mut self) {
+        self.input.sort_by(|a, b| {a.key.cmp(&b.key)});
+    }
+    fn sort_everything(&mut self) {
+        self.sort_main_nodes();
+        self.sort_children_nodes();
 
-        if !child_removed {
-            if key < self.input[0].key {
-                return self.children[0].lock().unwrap().remove_key(key);
-            } else if key > self.input[self.input.len()-1].key {
-                return self.children[self.children.len()-1].lock().unwrap().remove_key(key);
-            } else {
-                for i in 0..self.input.len() - 1 {
-                    if key > self.input[i].key && key < self.input[i+1].key {
-                        return self.children[i+1].lock().unwrap().remove_key(key);
-                    }
-                }
-            }
+        let children: Vec<Arc<Mutex<Node>>> = self.children.clone();
+
+        for child in children {
+            let mut child_guard = child.lock().unwrap();
+            child_guard.sort_everything();
         }
-        
     }
 }
 
@@ -392,10 +366,9 @@ fn main() {
         c = c + 1;
         println!("{:?}", c);
     }
-    
-    println!("{:?}", f.lock().unwrap().print_tree());
 
-/*    println!("Key to be discovered?");
+
+    println!("Key to be discovered?");
     let required_key = read_num();
 
     match Node::key_position(f.clone(),required_key) {
@@ -404,12 +377,12 @@ fn main() {
             println!("{:?}", x);
         }
         None => println!("Key not found"),
-    }*/
-
-    println!("Keys to be deleted?");
-    let required_key = read_num();
-    f.lock().unwrap().remove_key(required_key);
+    }
+    
+    
     println!("{:?}", f.lock().unwrap().print_tree());
+
+    
 }
 
 
