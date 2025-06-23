@@ -415,23 +415,34 @@ impl Node {
     }
     
     fn parent_key_down(self_node: MutexGuard<Node>, idx: usize) -> MutexGuard<Node> {
+        struct Value {
+            difference: usize,
+            index: usize,
+        }
+
         let mut self_instance = self_node;
         let break_point = (self_instance.children.len() + 1) / 2;
 
-
         let mut child_with_keys = false;
-        let mut index = 0;
+        let mut index_vector = Vec::new();
+        let mut index_vector_position = Vec::new();
         for i in 0..self_instance.children.len() {
             if self_instance.children[i].lock().unwrap().input.len() > *NODE_SIZE.get().unwrap() / 2 {
                 child_with_keys = true;
-                index = i;
-                break;
+                let mut k = 0;
+                if idx > i {
+                    k = idx - i;
+                } else {
+                    k = i - idx;
+                }
+                index_vector_position.push(Value{difference: k, index: i});
+                index_vector.push(i);
             }
         }
 
-
+        index_vector_position.sort_by(|a, b| a.difference.cmp(&b.difference));
         if child_with_keys {
-            self_instance = Node::moving_keys(self_instance, idx, index);
+            self_instance = Node::moving_keys(self_instance, idx, index_vector_position[0].index);
         } else if !child_with_keys {
             if idx + 1 < break_point {
                 let k = self_instance.input[0].clone();
@@ -471,15 +482,11 @@ impl Node {
                 }
             }
         }
-
-
         self_instance
     }
 
     fn moving_keys(self_node:MutexGuard<Node>, idx1: usize, idx2: usize) -> MutexGuard<Node> {
         let mut self_instance = self_node;
-        println!("ZZZ {:?}", self_instance.print_tree());
-        println!("{} {}", idx1, idx2);
 
         if idx1 < idx2 {
             let m = self_instance.input[idx2-1].clone();
@@ -489,12 +496,26 @@ impl Node {
 
             self_instance.input.push(k);
             self_instance.children[idx2 - 1].lock().unwrap().input.push(m);
+        } else if idx1 > idx2 {
+            let m = self_instance.input[idx2].clone();
+            let len = self_instance.children[idx2].lock().unwrap().input.len();
+            let k = self_instance.children[idx2].lock().unwrap().input[len - 1].clone();
+            self_instance.input.remove(idx2);
+            self_instance.children[idx2].lock().unwrap().input.remove(len - 1);
+
+            self_instance.input.push(k);
+            self_instance.children[idx2+1].lock().unwrap().input.push(m);
+
         }
+        self_instance.sort_everything();
         if self_instance.children[idx1].lock().unwrap().input.len() < *NODE_SIZE.get().unwrap() / 2 {
-            self_instance = Node::moving_keys(self_instance, idx1, idx2-1);
+            if idx1 < idx2 {
+                self_instance = Node::moving_keys(self_instance, idx1, idx2-1);
+            } else if idx1 > idx2 {
+                self_instance = Node::moving_keys(self_instance, idx1, idx2+1);
+            }
         }
-        self_instance.sort_main_nodes();
-        
+
         self_instance
     }
 }
@@ -504,18 +525,18 @@ fn main() {
     NODE_SIZE.set(4).expect("Failed to set size");
     let mut f = Node::new();
     let mut c = 0;
-/*    for i in 0..100 {
+    for i in 0..100 {
         let sec = rand::thread_rng().gen_range(1, 1000);
         Node::insert(&mut f, sec, String::from("Woof"));
         c = c + 1;
         println!("{} - {}", c, sec);
-    }*/
+    }
 
-    Node::insert(&mut f, 1, String::from("Woof"));
+/*    Node::insert(&mut f, 1, String::from("Woof"));
     Node::insert(&mut f, 2, String::from("Woof"));
-    Node::insert(&mut f, 3, String::from("Woof"));
     Node::insert(&mut f, 4, String::from("Woof"));
     Node::insert(&mut f, 5, String::from("Woof"));
+    Node::insert(&mut f, 15, String::from("Woof"));
     Node::insert(&mut f, 6, String::from("Woof"));
     Node::insert(&mut f, 7, String::from("Woof"));
     Node::insert(&mut f, 8, String::from("Woof"));
@@ -526,7 +547,8 @@ fn main() {
     Node::insert(&mut f, 13, String::from("Woof"));
     Node::insert(&mut f, 14, String::from("Woof"));
     Node::insert(&mut f, 15, String::from("Woof"));
-
+    Node::insert(&mut f, 3, String::from("Woof"));
+*/
     println!("{:?}", f.lock().unwrap().print_tree());
 
 /*    println!("Key to be discovered?");
