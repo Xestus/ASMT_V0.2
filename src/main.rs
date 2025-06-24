@@ -1,3 +1,4 @@
+use std::io::Write;
 extern crate rand;
 
 use std::io;
@@ -6,6 +7,8 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use rand::Rng;
+use std::fs::{File, OpenOptions};
+
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
 
@@ -537,6 +540,47 @@ impl Node {
             Node::collect_keys_inorder(&node_instance.children[node_instance.input.len()], result);
         }
     }
+    
+    fn serialize(node: &Arc<Mutex<Node>>) -> io::Result<()>  {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open("example.txt")?;
+        
+        Node::serialization(node, &mut file);
+        Ok(())
+    }
+    
+    fn serialization(node: &Arc<Mutex<Node>>, file: &mut File) {
+        let node_instance = node.lock().unwrap();
+
+        let l = node_instance.input.len();
+
+        writeln!(file, "[{:X}]", l).expect("panic message");
+        // println!("[{:X}]", l);
+        for i in 0..l {
+            write!(file, "[{}]", node_instance.input[i].key).expect("panic message");
+            // print!("[{}]", node_instance.input[i].key);
+            let value_len = node_instance.input[i].value.len();
+            write!(file, "[{}]", value_len).expect("panic message");
+            // print!("[{}]", value_len);
+            let x : Vec<char> = node_instance.input[i].value.chars().collect();
+            write!(file, "{:?}", x).expect("panic message");
+            // print!("{:?}", x);
+            writeln!(file,"").expect("panic message");
+            // println!("");
+        }
+        writeln!(file,"[{:X}]", node_instance.children.len()).expect("panic message");
+        // println!("[{:X}]", node_instance.children.len());
+
+        if !node_instance.children.is_empty() {
+            for i in 0..node_instance.input.len() {
+                Node::serialization(&node_instance.children[i], file);
+            }
+            Node::serialization(&node_instance.children[node_instance.input.len()], file);
+        }
+    }
 }
 
 fn main() {
@@ -544,30 +588,30 @@ fn main() {
     NODE_SIZE.set(4).expect("Failed to set size");
     let mut f = Node::new();
     let mut c = 0;
-/*    for i in 0..100 {
+    for i in 0..100 {
         let sec = rand::thread_rng().gen_range(1, 1000);
         Node::insert(&mut f, sec, String::from("Woof"));
         c = c + 1;
         println!("{} - {}", c, sec);
-    }*/
+    }
 
-    Node::insert(&mut f, 1, String::from("Woof"));
-    Node::insert(&mut f, 2, String::from("Woof"));
-    Node::insert(&mut f, 4, String::from("Woof"));
-    Node::insert(&mut f, 5, String::from("Woof"));
-    Node::insert(&mut f, 15, String::from("Woof"));
-    Node::insert(&mut f, 6, String::from("Woof"));
-    Node::insert(&mut f, 7, String::from("Woof"));
-    Node::insert(&mut f, 8, String::from("Woof"));
-    Node::insert(&mut f, 9, String::from("Woof"));
-    Node::insert(&mut f, 10, String::from("Woof"));
-    Node::insert(&mut f, 11, String::from("Woof"));
-    Node::insert(&mut f, 12, String::from("Woof"));
-    Node::insert(&mut f, 13, String::from("Woof"));
-    Node::insert(&mut f, 14, String::from("Woof"));
-    Node::insert(&mut f, 15, String::from("Woof"));
-    Node::insert(&mut f, 3, String::from("Woof"));
-
+/*    Node::insert(&mut f, 1, String::from("Woof"));
+    Node::insert(&mut f, 2, String::from("Quack"));
+    Node::insert(&mut f, 4, String::from("Meow"));
+    Node::insert(&mut f, 5, String::from("Bhau"));
+    Node::insert(&mut f, 15, String::from("Rawr"));
+    Node::insert(&mut f, 6, String::from("Bark"));
+    Node::insert(&mut f, 7, String::from("Neigh"));
+    Node::insert(&mut f, 8, String::from("Growl"));
+    Node::insert(&mut f, 9, String::from("Buzz"));
+    Node::insert(&mut f, 10, String::from("hee-haw"));
+    Node::insert(&mut f, 11, String::from("ribbit"));
+    Node::insert(&mut f, 12, String::from("Cluck"));
+    Node::insert(&mut f, 13, String::from("Trumpet"));
+    Node::insert(&mut f, 14, String::from("hiss"));
+    Node::insert(&mut f, 15, String::from("Mooo"));
+    Node::insert(&mut f, 3, String::from("Mooooooooooooooo"));
+*/
     println!("{:?}", f.lock().unwrap().print_tree());
 
 /*    println!("Key to be discovered?");
@@ -588,10 +632,12 @@ fn main() {
         println!("{:?}", f.lock().unwrap().print_tree());
     }*/
     
-    let k = Node::all_keys_ordered(&mut f);
+/*    let k = Node::all_keys_ordered(&mut f);
     for i in 0..k.len() {
         println!("{} - {}", k[i].key, k[i].value);
-    }
+    }*/
+    
+    Node::serialize(&f).expect("TODO: panic message");
     
 }
 
