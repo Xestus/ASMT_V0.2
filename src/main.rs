@@ -9,7 +9,7 @@ use rand::Rng;
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Ord, PartialOrd, Eq, Hash)]
 struct Items {
     key: u32,
     value: String,
@@ -388,7 +388,6 @@ impl Node {
             }
         }
     }
-    
     fn removed_node_check (self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut x = self_node;
 
@@ -413,7 +412,6 @@ impl Node {
 
         x
     }
-    
     fn parent_key_down(self_node: MutexGuard<Node>, idx: usize) -> MutexGuard<Node> {
         struct Value {
             difference: usize,
@@ -484,7 +482,6 @@ impl Node {
         }
         self_instance
     }
-
     fn moving_keys(self_node:MutexGuard<Node>, idx1: usize, idx2: usize) -> MutexGuard<Node> {
         let mut self_instance = self_node;
 
@@ -518,6 +515,28 @@ impl Node {
 
         self_instance
     }
+
+    fn all_keys_ordered(node: &Arc<Mutex<Node>>) -> Vec<Items> {
+        let mut result = Vec::new();
+        Self::collect_keys_inorder(node, &mut result);
+        result
+    }
+
+    fn collect_keys_inorder(node: &Arc<Mutex<Node>>, result: &mut Vec<Items>) {
+        let node_instance = node.lock().unwrap();
+
+        if node_instance.children.is_empty() {
+            for i in 0..node_instance.input.len() {
+                result.push(node_instance.input[i].clone());
+            }
+        } else {
+            for i in 0..node_instance.input.len() {
+                Node::collect_keys_inorder(&node_instance.children[i], result);
+                result.push(node_instance.input[i].clone());
+            }
+            Node::collect_keys_inorder(&node_instance.children[node_instance.input.len()], result);
+        }
+    }
 }
 
 fn main() {
@@ -525,14 +544,14 @@ fn main() {
     NODE_SIZE.set(4).expect("Failed to set size");
     let mut f = Node::new();
     let mut c = 0;
-    for i in 0..100 {
+/*    for i in 0..100 {
         let sec = rand::thread_rng().gen_range(1, 1000);
         Node::insert(&mut f, sec, String::from("Woof"));
         c = c + 1;
         println!("{} - {}", c, sec);
-    }
+    }*/
 
-/*    Node::insert(&mut f, 1, String::from("Woof"));
+    Node::insert(&mut f, 1, String::from("Woof"));
     Node::insert(&mut f, 2, String::from("Woof"));
     Node::insert(&mut f, 4, String::from("Woof"));
     Node::insert(&mut f, 5, String::from("Woof"));
@@ -548,7 +567,7 @@ fn main() {
     Node::insert(&mut f, 14, String::from("Woof"));
     Node::insert(&mut f, 15, String::from("Woof"));
     Node::insert(&mut f, 3, String::from("Woof"));
-*/
+
     println!("{:?}", f.lock().unwrap().print_tree());
 
 /*    println!("Key to be discovered?");
@@ -562,12 +581,18 @@ fn main() {
         None => println!("Key not found"),
     }*/
 
-    for i in 0..100 {
+/*    for i in 0..100 {
         println!("Keys to be deleted?");
         let required_key = read_num();
         Node::remove_key(&mut f, required_key);
         println!("{:?}", f.lock().unwrap().print_tree());
+    }*/
+    
+    let k = Node::all_keys_ordered(&mut f);
+    for i in 0..k.len() {
+        println!("{} - {}", k[i].key, k[i].value);
     }
+    
 }
 
 fn read_num() -> u32 {
