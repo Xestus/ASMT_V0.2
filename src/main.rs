@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{BufRead, BufReader, Read, Write};
 extern crate rand;
 
 use std::io;
@@ -8,7 +8,7 @@ use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use rand::Rng;
 use std::fs::{File, OpenOptions};
-
+use regex::Regex;
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
 
@@ -557,22 +557,17 @@ impl Node {
 
         let l = node_instance.input.len();
 
+        writeln!(file, "[{:X}]", node_instance.rank).expect("Error writing to file.");
         writeln!(file, "[{:X}]", l).expect("panic message");
-        // println!("[{:X}]", l);
         for i in 0..l {
             write!(file, "[{}]", node_instance.input[i].key).expect("panic message");
-            // print!("[{}]", node_instance.input[i].key);
             let value_len = node_instance.input[i].value.len();
-            write!(file, "[{}]", value_len).expect("panic message");
-            // print!("[{}]", value_len);
+            writeln!(file, "[{}]", value_len).expect("panic message");
             let x : Vec<char> = node_instance.input[i].value.chars().collect();
             write!(file, "{:?}", x).expect("panic message");
-            // print!("{:?}", x);
             writeln!(file,"").expect("panic message");
-            // println!("");
         }
         writeln!(file,"[{:X}]", node_instance.children.len()).expect("panic message");
-        // println!("[{:X}]", node_instance.children.len());
 
         if !node_instance.children.is_empty() {
             for i in 0..node_instance.input.len() {
@@ -581,21 +576,77 @@ impl Node {
             Node::serialization(&node_instance.children[node_instance.input.len()], file);
         }
     }
+    
+    fn deserialize() -> io::Result<()> {
+        let file = File::open("example.txt")?;
+        let read = BufReader::new(file);
+        
+        let single_bracket = Regex::new(r"^\[[^\]]+\]$").unwrap();
+        let double_bracket = Regex::new(r"^\[[^\]]+\]\[[^\]]+\]$").unwrap();
+        let array_pattern = Regex::new(r"^\[('[^']*'(,\s*'[^']*')*)\]$").unwrap();
+
+        for contents in read.lines() {
+            let x = contents?;
+            let k = x.as_str();
+
+            if array_pattern.is_match(k) {
+                let result: String = k
+                    .trim_matches(|c| c == '[' || c == ']')
+                    .split(", ")
+                    .map(|char_str| char_str.trim_matches('\'').chars().next().unwrap())
+                    .collect();
+
+                println!("{}", result);
+            }
+            
+            else if single_bracket.is_match(k) || double_bracket.is_match(k) {
+                let chars: Vec<char> = k.chars().collect();
+                let mut numbers = Vec::new();
+                let mut current_num = String::new();
+                let mut inside_brackets = false;
+
+                for &ch in &chars {
+                    match ch {
+                        '[' => inside_brackets = true,
+                        ']' => {
+                            if inside_brackets && !current_num.is_empty() {
+                                numbers.push(current_num.parse::<u32>().expect("Error parsing number"));
+                                current_num.clear();
+                            }
+                            inside_brackets = false;
+                        }
+                        digit if digit.is_ascii_digit() && inside_brackets => {
+                            current_num.push(digit);
+                        }
+                        _ => {}
+                    }
+                }
+
+                if numbers.len() == 2 {
+                    println!("{} {}", numbers[0], numbers[1]);
+                } else if numbers.len() == 1 {
+                    println!("{}", numbers[0]);
+                }
+            }
+
+        }
+        Ok(())
+    }
 }
 
 fn main() {
 
     NODE_SIZE.set(4).expect("Failed to set size");
     let mut f = Node::new();
-    let mut c = 0;
+/*    let mut c = 0;
     for i in 0..100 {
         let sec = rand::thread_rng().gen_range(1, 1000);
         Node::insert(&mut f, sec, String::from("Woof"));
         c = c + 1;
         println!("{} - {}", c, sec);
-    }
+    }*/
 
-/*    Node::insert(&mut f, 1, String::from("Woof"));
+    Node::insert(&mut f, 1, String::from("Woof"));
     Node::insert(&mut f, 2, String::from("Quack"));
     Node::insert(&mut f, 4, String::from("Meow"));
     Node::insert(&mut f, 5, String::from("Bhau"));
@@ -611,7 +662,8 @@ fn main() {
     Node::insert(&mut f, 14, String::from("hiss"));
     Node::insert(&mut f, 15, String::from("Mooo"));
     Node::insert(&mut f, 3, String::from("Mooooooooooooooo"));
-*/
+
+    println!("{:?}", f);
     println!("{:?}", f.lock().unwrap().print_tree());
 
 /*    println!("Key to be discovered?");
@@ -637,8 +689,10 @@ fn main() {
         println!("{} - {}", k[i].key, k[i].value);
     }*/
     
-    Node::serialize(&f).expect("TODO: panic message");
+    Node::serialize(&f).expect("panic message");
     
+    
+    Node::deserialize().expect("panic message");
 }
 
 fn read_num() -> u32 {
