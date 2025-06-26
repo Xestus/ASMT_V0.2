@@ -28,6 +28,11 @@ struct Node {
 
 static NODE_INSTANCE: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
+#[derive(Debug)]
+enum U32OrString {
+    Num(u32),
+    Str(String),
+}
 
 impl Node {
     fn new() -> Arc<Mutex<Node>> {
@@ -548,6 +553,7 @@ impl Node {
             .truncate(true)
             .open("example.txt")?;
         
+        writeln!(file, "[0]").expect("TODO: panic message");
         Node::serialization(node, &mut file);
         Ok(())
     }
@@ -576,8 +582,9 @@ impl Node {
             Node::serialization(&node_instance.children[node_instance.input.len()], file);
         }
     }
-    
-    fn deserialize() -> io::Result<()> {
+
+
+    fn deserialize(node: &Arc<Mutex<Node>>) -> io::Result<()> {
         let file = File::open("example.txt")?;
         let read = BufReader::new(file);
         
@@ -585,10 +592,12 @@ impl Node {
         let double_bracket = Regex::new(r"^\[[^\]]+\]\[[^\]]+\]$").unwrap();
         let array_pattern = Regex::new(r"^\[('[^']*'(,\s*'[^']*')*)\]$").unwrap();
 
+        let mut vec: Vec<U32OrString> = Vec::new();
+        
         for contents in read.lines() {
             let x = contents?;
             let k = x.as_str();
-
+            
             if array_pattern.is_match(k) {
                 let result: String = k
                     .trim_matches(|c| c == '[' || c == ']')
@@ -596,9 +605,10 @@ impl Node {
                     .map(|char_str| char_str.trim_matches('\'').chars().next().unwrap())
                     .collect();
 
-                println!("{}", result);
+                vec.push(U32OrString::Str(result));
+                // println!("{}", result);
             }
-            
+
             else if single_bracket.is_match(k) || double_bracket.is_match(k) {
                 let chars: Vec<char> = k.chars().collect();
                 let mut numbers = Vec::new();
@@ -623,14 +633,99 @@ impl Node {
                 }
 
                 if numbers.len() == 2 {
-                    println!("{} {}", numbers[0], numbers[1]);
+                    let k = numbers[0];
+                    vec.push(U32OrString::Num(numbers[0]));
+                    vec.push(U32OrString::Num(numbers[1]));
+                    // println!("{} {}", numbers[0], numbers[1]);
                 } else if numbers.len() == 1 {
-                    println!("{}", numbers[0]);
+                    vec.push(U32OrString::Num(numbers[0]));
+                    // println!("{}", numbers[0]);
                 }
             }
-
         }
+
+        let vector_len = vec.len();
+        let mut count = 0;
+        let mut internal_count = 0;
+        let mut vec_items: Vec<Items> = Vec::new();
+        let mut node_vec: Vec<Vec<Items>> = Vec::new();
+        let mut no_of_keys_helper_counter = 0;
+        let mut first_time_hit_item_push = true;
+        let mut rank_for_keys = 0;
+        let mut push_count = 0;
+        for i in 0..vector_len {
+            let mut no_of_keys =0;
+            count = count + 1;
+
+
+            if count > 3 {
+                if let U32OrString::Num(value) = &vec[no_of_keys_helper_counter + 2] {
+                    no_of_keys = *value;
+                }
+                println!("Number of keys: {} count: {} int_node: {}", no_of_keys, count, no_of_keys_helper_counter);
+
+                internal_count = internal_count + 1;
+                if (no_of_keys * 3 + 4) as usize == count && count > (no_of_keys * 3) as usize{
+                    let mut k = 0;
+                    if let U32OrString::Num(value) = &vec[count -1] {
+                        k = *value;
+                    }
+                    println!("########################################################");
+                    println!("{:?}", k);
+                    println!("###############################################################");
+                    
+                    // count = count - 1;
+                }
+            }
+            if internal_count >= (no_of_keys * 3 + 3) as usize {
+                println!("Kount: {}, Momber of keys: {}   ////////////////////////////",  internal_count, no_of_keys);
+                vec_items.clear();
+                no_of_keys_helper_counter = no_of_keys_helper_counter + (no_of_keys * 3 + 3) as usize;
+                internal_count = 0;
+                first_time_hit_item_push = true;
+            }
+            if internal_count % 3 == 0 && internal_count >= 3 {
+                let mut k = 0;
+                let mut l = String::new();
+
+                if first_time_hit_item_push {
+                    if let U32OrString::Num(value) = &vec[count - 5] {
+                        rank_for_keys = *value;
+                    }
+                    first_time_hit_item_push = false;
+                }
+                
+                if let U32OrString::Num(value) = &vec[count - 3] {
+                    k = *value;
+
+                }
+
+                if let U32OrString::Str(value) = &vec[count - 1] {
+                    l = value.clone();
+                }
+
+                vec_items.push(Items{key:k, value: l, rank: rank_for_keys });
+                push_count += 1;
+                println!("-----------------------------------------------");
+                println!("{} {}", no_of_keys, push_count);
+                println!("{} {} {:?}",count, internal_count, vec_items);
+                println!("-----------------------------------------------");
+            }
+            
+            if no_of_keys == push_count && !vec_items.is_empty() {
+                node_vec.push(vec_items.clone());
+                push_count = 0;
+            }
+        }
+        
+        println!("----------------");
+        println!("{:?}", node_vec);
+        println!("----------------");
+
         Ok(())
+    }
+
+    fn deserialized_data_input() {
     }
 }
 
@@ -689,10 +784,10 @@ fn main() {
         println!("{} - {}", k[i].key, k[i].value);
     }*/
     
-    Node::serialize(&f).expect("panic message");
+    // Node::serialize(&f).expect("panic message");
     
     
-    Node::deserialize().expect("panic message");
+    Node::deserialize(&f).expect("panic message");
 }
 
 fn read_num() -> u32 {
