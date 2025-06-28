@@ -34,6 +34,12 @@ enum U32OrString {
     Str(String),
 }
 
+#[derive(Debug, Clone)]
+struct DeserializedNode {
+    items: Vec<Items>,
+    child_count: u32,
+}
+
 impl Node {
     fn new() -> Arc<Mutex<Node>> {
         NODE_INSTANCE.fetch_add(1, Ordering::SeqCst);
@@ -648,7 +654,7 @@ impl Node {
         let mut count = 0;
         let mut internal_count = 0;
         let mut vec_items: Vec<Items> = Vec::new();
-        let mut node_vec: Vec<Vec<Items>> = Vec::new();
+        let mut node_vec: Vec<DeserializedNode> = Vec::new();
         let mut no_of_keys_helper_counter = 0;
         let mut first_time_hit_item_push = true;
         let mut rank_for_keys = 0;
@@ -662,7 +668,6 @@ impl Node {
                 if let U32OrString::Num(value) = &vec[no_of_keys_helper_counter + 2] {
                     no_of_keys = *value;
                 }
-                println!("Number of keys: {} count: {} int_node: {}", no_of_keys, count, no_of_keys_helper_counter);
 
                 internal_count = internal_count + 1;
                 if (no_of_keys * 3 + 4) as usize == count && count > (no_of_keys * 3) as usize{
@@ -670,15 +675,22 @@ impl Node {
                     if let U32OrString::Num(value) = &vec[count -1] {
                         k = *value;
                     }
-                    println!("########################################################");
-                    println!("{:?}", k);
-                    println!("###############################################################");
-                    
-                    // count = count - 1;
                 }
             }
+            
+            if internal_count == (no_of_keys * 3 + 1) as usize {
+                let mut probable_child_count = 0;
+                if let U32OrString::Num(value) = &vec[count -1] {
+                    probable_child_count = *value;
+                }
+                if no_of_keys == push_count && !vec_items.is_empty() {
+                    node_vec.push(DeserializedNode { items:vec_items.clone(), child_count: probable_child_count });
+                    push_count = 0;
+                }
+
+            }
+            
             if internal_count >= (no_of_keys * 3 + 3) as usize {
-                println!("Kount: {}, Momber of keys: {}   ////////////////////////////",  internal_count, no_of_keys);
                 vec_items.clear();
                 no_of_keys_helper_counter = no_of_keys_helper_counter + (no_of_keys * 3 + 3) as usize;
                 internal_count = 0;
@@ -706,16 +718,8 @@ impl Node {
 
                 vec_items.push(Items{key:k, value: l, rank: rank_for_keys });
                 push_count += 1;
-                println!("-----------------------------------------------");
-                println!("{} {}", no_of_keys, push_count);
-                println!("{} {} {:?}",count, internal_count, vec_items);
-                println!("-----------------------------------------------");
             }
             
-            if no_of_keys == push_count && !vec_items.is_empty() {
-                node_vec.push(vec_items.clone());
-                push_count = 0;
-            }
         }
         
         println!("----------------");
@@ -741,22 +745,28 @@ fn main() {
         println!("{} - {}", c, sec);
     }*/
 
+    Node::insert(&mut f, 42, String::from("Woof"));
+    Node::insert(&mut f, 17, String::from("Woof"));
+    Node::insert(&mut f, 89, String::from("Woof"));
+    Node::insert(&mut f, 5, String::from("Woof"));
+    Node::insert(&mut f, 73, String::from("Woof"));
+    Node::insert(&mut f, 31, String::from("Woof"));
+    Node::insert(&mut f, 96, String::from("Woof"));
+    Node::insert(&mut f, 12, String::from("Woof"));
+    Node::insert(&mut f, 58, String::from("Woof"));
+    Node::insert(&mut f, 84, String::from("Woof"));
+    Node::insert(&mut f, 26, String::from("Woof"));
+    Node::insert(&mut f, 63, String::from("Woof"));
     Node::insert(&mut f, 1, String::from("Woof"));
-    Node::insert(&mut f, 2, String::from("Quack"));
-    Node::insert(&mut f, 4, String::from("Meow"));
-    Node::insert(&mut f, 5, String::from("Bhau"));
-    Node::insert(&mut f, 15, String::from("Rawr"));
-    Node::insert(&mut f, 6, String::from("Bark"));
-    Node::insert(&mut f, 7, String::from("Neigh"));
-    Node::insert(&mut f, 8, String::from("Growl"));
-    Node::insert(&mut f, 9, String::from("Buzz"));
-    Node::insert(&mut f, 10, String::from("hee-haw"));
-    Node::insert(&mut f, 11, String::from("ribbit"));
-    Node::insert(&mut f, 12, String::from("Cluck"));
-    Node::insert(&mut f, 13, String::from("Trumpet"));
-    Node::insert(&mut f, 14, String::from("hiss"));
-    Node::insert(&mut f, 15, String::from("Mooo"));
-    Node::insert(&mut f, 3, String::from("Mooooooooooooooo"));
+    Node::insert(&mut f, 47, String::from("Woof"));
+    Node::insert(&mut f, 100, String::from("Woof"));
+    Node::insert(&mut f, 35, String::from("Woof"));
+    Node::insert(&mut f, 71, String::from("Woof"));
+    Node::insert(&mut f, 19, String::from("Woof"));
+    Node::insert(&mut f, 54, String::from("Woof"));
+    Node::insert(&mut f, 88, String::from("Woof"));
+    Node::insert(&mut f, 7, String::from("Woof"));
+    Node::insert(&mut f, 92, String::from("Woof"));
 
     println!("{:?}", f);
     println!("{:?}", f.lock().unwrap().print_tree());
