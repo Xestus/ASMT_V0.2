@@ -23,7 +23,6 @@ struct Node {
     input: Vec<Items>,
     rank: u32,
     children: Vec<Arc<Mutex<Node>>>,
-    parent: Option<Weak<Mutex<Node>>>,
 }
 
 static NODE_INSTANCE: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
@@ -39,6 +38,11 @@ struct DeserializedNode {
     items: Vec<Items>,
     child_count: u32,
 }
+#[derive(Debug, Clone)]
+struct UltraDeserialized {
+    parent: DeserializedNode,
+    children: Vec<UltraDeserialized>,
+}
 
 impl Node {
     fn new() -> Arc<Mutex<Node>> {
@@ -47,7 +51,6 @@ impl Node {
             input: Vec::new(),
             rank: 1,
             children: Vec::new(),
-            parent: None,
         }));
         instance
     }
@@ -590,7 +593,7 @@ impl Node {
     }
 
 
-    fn deserialize(node: &Arc<Mutex<Node>>) -> io::Result<()> {
+    fn deserialize() -> io::Result<()> {
         let file = File::open("example.txt")?;
         let read = BufReader::new(file);
         
@@ -721,15 +724,45 @@ impl Node {
             }
             
         }
-        
         println!("----------------");
         println!("{:?}", node_vec);
         println!("----------------");
+        
+        let mut required_node = node_vec[0].clone();
+        let x = Node::deserialized_data_input(required_node,node_vec);
 
+        println!("KKKKKK {:?}", x);
         Ok(())
     }
+    
 
-    fn deserialized_data_input() {
+    fn deserialized_data_input(required_node :DeserializedNode, node_vec: Vec<DeserializedNode>) -> UltraDeserialized {
+        let mut node_vec_instance = node_vec;
+        let mut x = UltraDeserialized {parent: required_node.clone(), children: Vec::new()};
+        if required_node.child_count > 0 {
+            let mut i = 0;
+            while i < node_vec_instance.len() && required_node.child_count > x.children.len() as u32 {
+
+                if required_node.items[0].rank + 1 == node_vec_instance[i].items[0].rank {
+                    x.children.push(UltraDeserialized {parent: node_vec_instance[i].clone(), children: Vec::new()});
+                    node_vec_instance.remove(i);
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+
+        if x.parent.child_count > 0 {
+            for i in 0..(x.children.len() - 1) {
+                let mut z;
+                if x.children[i].parent.child_count != 0 {
+                    z = Node::deserialized_data_input(x.children[i].parent.clone(),node_vec_instance.clone());
+                    x.children.push(z);
+                } 
+           }
+        }
+        x
     }
 }
 
@@ -797,7 +830,7 @@ fn main() {
     // Node::serialize(&f).expect("panic message");
     
     
-    Node::deserialize(&f).expect("panic message");
+    Node::deserialize().expect("panic message");
 }
 
 fn read_num() -> u32 {
