@@ -1,12 +1,11 @@
-use std::io::{BufRead, BufReader, Read, Write};
+use crate::rand::Rng;
+use std::io::{BufRead, BufReader, Write};
 extern crate rand;
 
 use std::io;
-use std::ptr::read;
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Mutex, MutexGuard};
 use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use rand::Rng;
 use std::fs::{File, OpenOptions};
 use regex::Regex;
 
@@ -592,11 +591,10 @@ impl Node {
         }
     }
 
-
     fn deserialize() -> io::Result<()> {
         let file = File::open("example.txt")?;
         let read = BufReader::new(file);
-        
+
         let single_bracket = Regex::new(r"^\[[^\]]+\]$").unwrap();
         let double_bracket = Regex::new(r"^\[[^\]]+\]\[[^\]]+\]$").unwrap();
         let array_pattern = Regex::new(r"^\[('[^']*'(,\s*'[^']*')*)\]$").unwrap();
@@ -642,13 +640,10 @@ impl Node {
                 }
 
                 if numbers.len() == 2 {
-                    let k = numbers[0];
                     vec.push(U32OrString::Num(numbers[0]));
                     vec.push(U32OrString::Num(numbers[1]));
-                    // println!("{} {}", numbers[0], numbers[1]);
                 } else if numbers.len() == 1 {
                     vec.push(U32OrString::Num(numbers[0]));
-                    // println!("{}", numbers[0]);
                 }
             }
         }
@@ -662,7 +657,7 @@ impl Node {
         let mut first_time_hit_item_push = true;
         let mut rank_for_keys = 0;
         let mut push_count = 0;
-        for i in 0..vector_len {
+        for _i in 0..vector_len {
             let mut no_of_keys =0;
             count = count + 1;
 
@@ -724,86 +719,126 @@ impl Node {
             }
             
         }
-        println!("----------------");
-        println!("{:?}", node_vec);
-        println!("----------------");
-        
-        let mut required_node = node_vec[0].clone();
-        let x = Node::deserialized_data_input(required_node,node_vec);
 
-        println!("KKKKKK {:?}", x);
+        let required_node = node_vec[0].clone();
+        let x = Node::deserialized_with_relation(required_node, &mut node_vec);
+
+        let mut k = Node::deserialized_data_to_nodes(x);
+        k = Node::deserialized_duplicate_data_check(k);
+
+        println!("###############################################");
+        println!("{:?}", k.print_tree());
+        println!("###############################################");
+
+
         Ok(())
     }
-    
 
-    fn deserialized_data_input(required_node :DeserializedNode, node_vec: Vec<DeserializedNode>) -> UltraDeserialized {
-        let mut node_vec_instance = node_vec;
+    fn deserialized_with_relation(required_node: DeserializedNode, node_vec:&mut  Vec<DeserializedNode>) -> UltraDeserialized {
         let mut x = UltraDeserialized {parent: required_node.clone(), children: Vec::new()};
         if required_node.child_count > 0 {
             let mut i = 0;
-            while i < node_vec_instance.len() && required_node.child_count > x.children.len() as u32 {
-
-                if required_node.items[0].rank + 1 == node_vec_instance[i].items[0].rank {
-                    x.children.push(UltraDeserialized {parent: node_vec_instance[i].clone(), children: Vec::new()});
-                    node_vec_instance.remove(i);
+            while i < node_vec.len() && required_node.child_count > x.children.len() as u32 {
+                if required_node.items[0].rank + 1 == node_vec[i].items[0].rank {
+                    x.children.push(UltraDeserialized {parent: node_vec[i].clone(), children: Vec::new()});
+                    node_vec.remove(i);
                 } else {
                     i += 1;
                 }
             }
         }
 
-
         if x.parent.child_count > 0 {
-            for i in 0..(x.children.len() - 1) {
+            for i in 0..(x.children.len()) {
                 let mut z;
                 if x.children[i].parent.child_count != 0 {
-                    z = Node::deserialized_data_input(x.children[i].parent.clone(),node_vec_instance.clone());
+                    z = Node::deserialized_with_relation(x.children[i].parent.clone(), node_vec);
                     x.children.push(z);
-                } 
+                }
            }
         }
         x
     }
+
+    fn deserialized_duplicate_data_check(self_node: Node) -> Node {
+        let mut self_instance = self_node;
+        let mut dup_child_len = self_instance.children.len()/2;
+        
+/*        for i in 0..child_len {
+            let child_2_len = self_instance.children[i].lock().unwrap().children.len();
+            println!(" child_2_len: {} {:?}", child_2_len, self_instance.print_tree());
+            
+            let inp_len = self_instance.children[i].lock().unwrap().input.len();
+            if inp_len + 1 != child_2_len {
+                self_instance.children.remove(0);
+            }
+        }*/
+
+        let mut i = 0;
+        while i < self_instance.children.len() {
+            let first_child = self_instance.children[i].lock().unwrap().input.clone();
+            let mut found_duplicate = false;
+
+            for j in (i + 1)..self_instance.children.len() {
+                let second_child = self_instance.children[j].lock().unwrap().input.clone();
+
+                if first_child[0] == second_child[0] {
+                    self_instance.children.remove(i);
+                    found_duplicate = true;
+                    break;
+                }
+            }
+
+            if !found_duplicate {
+                i += 1;
+            }
+        }
+
+        for i in 0..dup_child_len {
+            let child_child_len = self_instance.children[i].lock().unwrap().children.len();
+            let mut x = self_instance.children[i].lock().unwrap().clone();
+            if child_child_len > 0 {
+                self_instance.children[i] = Arc::new(Mutex::new(Node::deserialized_duplicate_data_check(x)));
+            }
+        }
+
+        self_instance
+
+    }
+
+    fn deserialized_data_to_nodes(deserialized_data: UltraDeserialized) -> Node {
+        let mut new_node = Node{input: Vec::new(), rank: 0, children: Vec::new()};
+
+        new_node.input = deserialized_data.parent.items.clone();
+        new_node.rank = deserialized_data.parent.items[0].rank;
+
+        if !deserialized_data.children.is_empty() {
+            let child_len = deserialized_data.children.len();
+            let mut child_vec = Vec::new();
+            for j in 0..child_len {
+                let k = Arc::new(Mutex::new(Node::deserialized_data_to_nodes(deserialized_data.children[j].clone())));
+                child_vec.push(k);
+            }
+            new_node.children = child_vec;
+        }
+
+        new_node
+    }
+
 }
 
 fn main() {
 
     NODE_SIZE.set(4).expect("Failed to set size");
     let mut f = Node::new();
-/*    let mut c = 0;
+    let mut c = 0;
     for i in 0..100 {
         let sec = rand::thread_rng().gen_range(1, 1000);
         Node::insert(&mut f, sec, String::from("Woof"));
         c = c + 1;
         println!("{} - {}", c, sec);
-    }*/
-
-    Node::insert(&mut f, 42, String::from("Woof"));
-    Node::insert(&mut f, 17, String::from("Woof"));
-    Node::insert(&mut f, 89, String::from("Woof"));
-    Node::insert(&mut f, 5, String::from("Woof"));
-    Node::insert(&mut f, 73, String::from("Woof"));
-    Node::insert(&mut f, 31, String::from("Woof"));
-    Node::insert(&mut f, 96, String::from("Woof"));
-    Node::insert(&mut f, 12, String::from("Woof"));
-    Node::insert(&mut f, 58, String::from("Woof"));
-    Node::insert(&mut f, 84, String::from("Woof"));
-    Node::insert(&mut f, 26, String::from("Woof"));
-    Node::insert(&mut f, 63, String::from("Woof"));
-    Node::insert(&mut f, 1, String::from("Woof"));
-    Node::insert(&mut f, 47, String::from("Woof"));
-    Node::insert(&mut f, 100, String::from("Woof"));
-    Node::insert(&mut f, 35, String::from("Woof"));
-    Node::insert(&mut f, 71, String::from("Woof"));
-    Node::insert(&mut f, 19, String::from("Woof"));
-    Node::insert(&mut f, 54, String::from("Woof"));
-    Node::insert(&mut f, 88, String::from("Woof"));
-    Node::insert(&mut f, 7, String::from("Woof"));
-    Node::insert(&mut f, 92, String::from("Woof"));
-
-    println!("{:?}", f);
-    println!("{:?}", f.lock().unwrap().print_tree());
-
+    }
+    
 /*    println!("Key to be discovered?");
     let required_key = read_num();
 
@@ -827,9 +862,7 @@ fn main() {
         println!("{} - {}", k[i].key, k[i].value);
     }*/
     
-    // Node::serialize(&f).expect("panic message");
-    
-    
+    Node::serialize(&f).expect("panic message");
     Node::deserialize().expect("panic message");
 }
 

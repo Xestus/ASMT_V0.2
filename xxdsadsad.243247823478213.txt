@@ -1,133 +1,75 @@
-[0]                              -- no children...
-[1]                              -- rank
-[4]                              -- No. of keys
-[0]                              -- XXX
-[0]                              -- XXX
-[4]                              -- Key no 1.
-[4]                              -- value length
-['M', 'e', 'o', 'w']             -- value
-[7]                              -- key no. 2
-[5]                              -- value length
-['N', 'e', 'i', 'g', 'h']        -- value
-[10]                             -- key no. 3
-[7]                              -- value length
-['h', 'e', 'e', '-', 'h', 'a', 'w'] -- value
-[13]                             -- key no. 4
-[7]                              -- value length
-['T', 'r', 'u', 'm', 'p', 'e', 't'] -- value
-[5]                              -- no. of child of above
-[2]                              -- rank of child node
-[3]                              -- no of keys in child node
-[4]                              -- Parent ID no. 1
-[13]                             -- Parent ID no. 2
-[1]                              -- key no. 1
-[4]                              -- value length
-['W', 'o', 'o', 'f']             -- value
-[2]
-[5]
-['Q', 'u', 'a', 'c', 'k']
+[0] -- no children...
+[1] -- rank
+[1] -- no of keys
+[63] -- key 
+[4] -- value length
+['W', 'o', 'o', 'f'] -- value
+[2] -- no of children
+[2] -- rank of children
+[2] -- no of keys in child node 1
+[17] -- key no. 1
+[4] -- value length
+['W', 'o', 'o', 'f'] -- value
+[42] -- key no. 2
+[4] -- value length
+['W', 'o', 'o', 'f'] -- value
+[3] 
 [3]
-[16]
-['M', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o']
-[0]
-[2]
-[2]
-[5]
 [4]
-['B', 'h', 'a', 'u']
-[6]
+[1][4]
+['W', 'o', 'o', 'f']
+[5][4]
+['W', 'o', 'o', 'f']
+[7][4]
+['W', 'o', 'o', 'f']
+[12][4]
+['W', 'o', 'o', 'f']
+[0]
+[3]
 [4]
-['B', 'a', 'r', 'k']
+[19][4]
+['W', 'o', 'o', 'f']
+[26][4]
+['W', 'o', 'o', 'f']
+[31][4]
+['W', 'o', 'o', 'f']
+[35][4]
+['W', 'o', 'o', 'f']
+[0]
+[3]
+[3]
+[47][4]
+['W', 'o', 'o', 'f']
+[54][4]
+['W', 'o', 'o', 'f']
+[58][4]
+['W', 'o', 'o', 'f']
 [0]
 [2]
 [2]
-[8]
-[5]
-['G', 'r', 'o', 'w', 'l']
-[9]
-[4]
-['B', 'u', 'z', 'z']
+[84][4]
+['W', 'o', 'o', 'f']
+[92][4]
+['W', 'o', 'o', 'f']
+[3]
+[3]
+[2]
+[71][4]
+['W', 'o', 'o', 'f']
+[73][4]
+['W', 'o', 'o', 'f']
 [0]
+[3]
 [2]
-[2]
-[11]
-[6]
-['r', 'i', 'b', 'b', 'i', 't']
-[12][5]
-['C', 'l', 'u', 'c', 'k']
+[88][4]
+['W', 'o', 'o', 'f']
+[89][4]
+['W', 'o', 'o', 'f']
 [0]
+[3]
 [2]
-[2]
-[14][4]
-['h', 'i', 's', 's']
-[15][4]
-['R', 'a', 'w', 'r']
+[96][4]
+['W', 'o', 'o', 'f']
+[100][4]
+['W', 'o', 'o', 'f']
 [0]
-
-
-        for _i in 0..vector_len {
-            let mut no_of_keys =0;
-            count = count + 1;
-            sec_count += 1;
-            if sec_count > 5 {
-                if let U32OrString::Num(value) = &vec[no_of_keys_helper_counter + 2] {
-                    no_of_keys = *value;
-                }
-                println!("Number of keys: {} count: {} no. of keys helper: {}", no_of_keys, count, no_of_keys_helper_counter);
-
-                internal_count = internal_count + 1;
-                if (no_of_keys * 3 + 6) as usize == count && count > (no_of_keys * 3) as usize{
-                    let mut k = 0;
-                    if let U32OrString::Num(value) = &vec[count -3] {
-                        k = *value;
-                        
-                        println!("########################################################");
-                        println!("{:?}", k);
-                        println!("###############################################################");
-
-                    }
-                }
-            }
-            if internal_count >= (no_of_keys * 3 + 5) as usize {
-                println!("Kount: {}, Momber of keys: {}   ////////////////////////////",  internal_count, no_of_keys);
-                no_of_keys_helper_counter = no_of_keys_helper_counter + (no_of_keys * 3 + 5) as usize;
-                internal_count = 0;
-                first_time_hit_item_push = true;
-            }
-            if internal_count % 3 == 0 && internal_count >= 3 {
-                let mut k = 0;
-                let mut l = String::new();
-
-                if first_time_hit_item_push {
-                    if let U32OrString::Num(value) = &vec[count - 7] {
-                        rank_for_keys = *value;
-                    }
-                    first_time_hit_item_push = false;
-                }
-
-                if let U32OrString::Num(value) = &vec[count - 3] {
-                    k = *value;
-
-                }
-
-                if let U32OrString::Str(value) = &vec[count - 1] {
-                    l = value.clone();
-                }
-
-                vec_items.push(Items{key:k, value: l, rank: rank_for_keys });
-                push_count += 1;
-
-                println!("-----------------------------------------------");
-                println!("{} {}", no_of_keys, push_count);
-                println!("{} {} {:?}",count, internal_count, vec_items);
-                println!("-----------------------------------------------");
-
-            }
-
-            if no_of_keys == push_count && !vec_items.is_empty() {
-                node_vec.push(vec_items.clone());
-                vec_items.clear();
-                sec_count = 0;
-                push_count = 0;
-            }
-        }
