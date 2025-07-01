@@ -18,13 +18,13 @@ struct Items {
     rank: u32,
 }
 #[derive(Debug, Clone)]
+#[derive(Default)]
 struct Node {
     input: Vec<Items>,
     rank: u32,
     children: Vec<Arc<Mutex<Node>>>,
 }
 
-static NODE_INSTANCE: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
 #[derive(Debug)]
 enum U32OrString {
@@ -44,8 +44,20 @@ struct UltraDeserialized {
 }
 
 impl Node {
+    
+    /// The function creates a new empty node for a B-tree during initialization and operations such as splitting.
+    /// The default value of field `rank` is 1 as:
+    /// - A new B-Tree always starts with an empty Node with `rank: 1`.
+    /// - Any Node that isn't root node has it's rank default to `parent's rank + 1`.
+    ///
+    /// The fields `input` and `children` are initialized as empty Vector as:
+    /// - A new B-Tree's root node will always have 0 items and 0 children.
+    /// - Any new Node from splitting would have its input and children derived from its predecessor Node.
+    ///
+    /// The new Node is wrapped with Arc and Mutex as Mutex allows Thread-safe mutations and Arc allows Mutex to be shared across threads.
+    /// As the B-Tree will eventually scale up to concurrency, Arc<Mutex<T>> helps in future proofing the concept.
+    ///
     fn new() -> Arc<Mutex<Node>> {
-        NODE_INSTANCE.fetch_add(1, Ordering::SeqCst);
         let instance = Arc::new(Mutex::new(Node {
             input: Vec::new(),
             rank: 1,
@@ -54,7 +66,9 @@ impl Node {
         instance
     }
 
-    fn insert(self_node: &mut Arc<Mutex<Node>>, k: u32, v: String) -> () {
+    // Insert the K-V into the empty node.
+    // Todo: Understand why i had to call every function 3 times for correct functioning.
+    fn insert(self_node: &mut Arc<Mutex<Node>>, k: u32, v: String) {
         let mut z = self_node.try_lock().unwrap();
         let rank = z.rank;
         if !z.children.is_empty() {
@@ -63,112 +77,176 @@ impl Node {
         else {
             z.input.push(Items {key: k, value: v, rank});
         }
-
+        
+        // Every function takes variable z with datatype MutexGuard<T> because its the default form after .lock().unwrap() on Arc<Mutex<T>>.
         z = Node::overflow_check(z);
         z = Node::min_size_check(z);
         z.sort_main_nodes();
         z.sort_children_nodes();
-        z = Node::tree_split_check(z);
+        z = Node::tree_integrity_check(z);
         z = Node::min_size_check(z);
-
+        
         z = Node::overflow_check(z);
         z = Node::min_size_check(z);
         z.sort_main_nodes();
-        z = Node::tree_split_check(z);
+        z = Node::tree_integrity_check(z);
         z = Node::rank_correction(z);
         z.sort_everything();
         z = Node::overflow_check(z);
         z = Node::min_size_check(z);
-        z = Node::tree_split_check(z);
+        z = Node::tree_integrity_check(z);
         z = Node::rank_correction(z);
         z.sort_everything();
 
     }
+    
+    /// A maintenance function responsible for checking overflows on designated nodes.
+    /// The function recursively check children of the current Node only if the children exists and the node itself isn't overflowing.
+    /// If the current node has its key count greater than maximum designated value, a function "split_node" is invoked which splits overflowing node by relocating
+    /// keys smaller and larger than middle keys as its children, while middle key stays at the same level.
+    /// 
+    /// The function is expected to be called right and only after insertion.
+    /// 
+    /// Panics if: 
+    /// - static `NODE_SIZE` is uninitialized. 
+    /// - The children mutex is poisoned when used as recursive functional parameter. 
+    /// But both the `.unwrap()` are safe, I think.
+    /// 
+    /// - MutexGuard<Node> was used as both return and parameter because it allows reuse during recursion without relocking.
     fn overflow_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut x = self_node;
+        
+        // If the current node has more keys than the maximum limit, invoke `split_nodes` function.
         if x.input.len() > *NODE_SIZE.get().unwrap() {
             x = Node::split_nodes(x);
         } else if !x.children.is_empty() {
+            // If child node exists, recursively check for any node overflow.
             for i in 0..x.children.len() {
-                Node::overflow_check(x.children[i].lock().unwrap());
+                let _unused = Node::overflow_check(x.children[i].lock().unwrap());
             }
         }
         x
     }
+    
+    /// A private function exclusively invoked from `fn overflow_check` only if the selected node is overflowing i.e. The number of keys on the selected node
+    /// exceeds maximum pre-defined threshold.
+    /// 
+    /// The selected node is split by pushing the smaller and larger keys than the middle key as its children, while the middle key stays at the same level.
+    /// There will be no change to pre-existing children nodes. The newly added child nodes will be placed on the last 2 indices on the field `children`.
+    /// 
+    /// The splitting would create a temporary state of under-flowing node but quickly resolved by the recursive function `tree_integrity_check`
+    /// that checks whether the node has number of keys lesser than minimum pre-defined threshold.
+    /// The parent will node will have exactly 1 key and 2 new children.
+    /// 
+    /// 
+    /// The nodes containing the smaller and larger keys will always have their rank as one more than their parent (Node with middle key).
+    /// The field `rank` is modified twice, inside and after the loop because two struct containing field `rank`, 
+    /// Rank field of:
+    /// - struct `Node` represents the rank of the Node that contains explicit number of keys.
+    /// - struct `Items` represents rank of the individual key/value.
+    ///
+    /// (The key count of the node + 1)/2 is used to determine middle key, when the key count is:
+    /// - Odd: The middle key splits the node into 2 equal half.
+    /// - Even: The middle key splits the node into 2 half, where `number of keys larger than middle key - 1 = number of keys smaller than middle key`
+    ///
+    /// As the minimum possible designated maximum number of keys per node is 4, cases such as `.input.len()` being 0 or 1 is completely avoided.
+    /// TODO: Edge Cases such as: Mutex for `struct_one` and `struct_two` being poisoned.
+    ///
     fn split_nodes(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
-        let mut self_instance = self_node;
+        let mut self_instance = self_node;         // Mutable instance of self_node.
 
         self_instance.sort_main_nodes();
 
-        let struct_one = Node::new();
-        let struct_two = Node::new();
-
-
+        let struct_one = Node::new(); // Holds keys smaller than middle key.
+        let struct_two = Node::new(); // Holds keys larger than middle key.
+        
         let items_size = self_instance.input.len();
         let breaking_point = (items_size + 1)/2;
-        let temp_storage = self_instance.clone();
-        let mut count = 0;
+        let temp_storage = self_instance.clone(); 
         let mut i = 0;
         self_instance.input.clear();
-        for _v in temp_storage.input.iter() {
-            count +=1;
-
+        for count in 1..temp_storage.input.len() + 1 {
             if count == breaking_point {
-                self_instance.input.push(temp_storage.input[count-1].clone());
-            } else if count > breaking_point {
-                i = i + 1;
-                struct_two.lock().unwrap().input.push(temp_storage.input[count - 1].clone());
-                struct_two.lock().unwrap().input[i - 1].rank = temp_storage.rank + 1;
+                self_instance.input.push(temp_storage.input[count-1].clone()); // Push the middle `Item` as sole parent. 
             } else if count < breaking_point {
-                struct_one.lock().unwrap().input.push(temp_storage.input[count-1].clone());
-                struct_one.lock().unwrap().input[count - 1].rank = temp_storage.rank + 1;
-            }
+                struct_one.lock().unwrap().input.push(temp_storage.input[count-1].clone()); // Push the `Items` with keys smaller than middle key onto struct_one.
+                struct_one.lock().unwrap().input[count - 1].rank = temp_storage.rank + 1; // Set the key rank as parent node's rank + 1.
+            } else if count > breaking_point {
+                i = i + 1; // Variable "i" was used instead of count because `i` denotes the number of keys in struct_two.
+                struct_two.lock().unwrap().input.push(temp_storage.input[count - 1].clone()); // Push the `Items` with keys larger than middle key onto struct_two.
+                struct_two.lock().unwrap().input[i - 1].rank = temp_storage.rank + 1; // Set their key rank as parent node's rank + 1.
+            } 
         }
 
-
+        // Set struct_one/two's node rank as parent's node rank + 1.
         struct_one.lock().unwrap().rank = self_instance.rank + 1;
         struct_two.lock().unwrap().rank = self_instance.rank + 1;
         
-        self_instance.children.push(struct_one.clone());
-        self_instance.children.push(struct_two.clone());
         
+        self_instance.children.push(struct_one);
+        self_instance.children.push(struct_two);
         
         self_instance
     }
-    fn tree_split_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
+
+    /// Checks for nodes violating the B-tree invariant `children.len() == input.len() + 1`,
+    /// which can occur after a split or merge operation.
+    /// An example of under-flowing node with large child count.
+    /// ```
+    ///                                [754]
+    ///    -----------------------------|---------------------------------------
+    ///   /       |         |           |          |          |        |        \
+    /// [7,9]  [410,480] [615,627]  [786, 809] [847, 879] [940,942] [365, 577] [839, 881]
+    /// ```
+    ///
+    /// B-Tree must obey the rule which states: For every leaf nodes, number of parent keys + 1 == number of children node
+    /// If the designated node fails the condition, the function `fix_child_count_mismatch` is invoked which fixes the failed condition by:
+    /// - The violating node's keys are redistributed:
+    ///     - Extract the first/last keys of all children to determine merge candidates.
+    ///     - Nodes with overlapping key ranges are merged (e.g., `[365, 577]` and `[839, 881]`).
+    /// - The first and last keys of the selected nodes are used as to identify nodes that span key ranges overlapping with others.
+    ///     - Sentinel values ensure nodes with minimal/maximal keys are merged last,preserving tree order during rebalancing.
+    /// - Remaining nodes are arranged as children based on the first and last keys of selected nodes.
+    ///
+    /// Variable `_unused` is safe because the guard is automatically dropped when the variable goes out of scope and the variable goes out of scope right after it is declared.
+    ///
+    /// There will be no deadlocks on iteration due to usage of variable `temporary_guard` which breaks
+    /// `Circular wait` of `Coffman's conditions` and every thread will access children in the given order.
+    ///
+    /// Variable `temporary_guard` *can* be poisoned but the value of MutexGuard<Node> will be extracted by `unwrap_or_else(...)`.
+    /// It's a patchy solution but stay till I add find better solution while redesigning system concurrent.
+    fn tree_integrity_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut self_instance = self_node;
         if self_instance.input.len() + 1 != self_instance.children.len() && !self_instance.children.is_empty() {
-            self_instance = Node::merge_weird_splitting(self_instance);
+            self_instance = Node::fix_child_count_mismatch(self_instance);
 
         } else if !self_instance.children.is_empty() {
             for i in 0..self_instance.children.len() {
-                Node::tree_split_check(self_instance.children[i].lock().unwrap());
+                let temporary_guard = self_instance.children[i].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let _unused = Node::tree_integrity_check(temporary_guard);
             }
         }
 
         self_instance
     }
-    fn merge_weird_splitting(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
-        
-        // TODO: So the issue is that the nodes split and take pre existing nodes. Hence, create a iterator which goes thru the required number and parent node, selects the count where it lands.
-        // For eg: Rank 1 node: [0] 643 [1] 1023 [2]. If the value of the new rank 2 node falls between 643 & 1023 i.e. count [1], it takes all of its siblings which fall on the same range,.
 
+
+    fn fix_child_count_mismatch(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut self_instance = self_node;
-        // HACK: Go through all instance of node and pick the node input where node whose lowest value is lesser than X's lowest val &
-        // highest value is higher than X's highest value. It should be duplicated and removed. And let the following function progress.
 
         let child_len = self_instance.children.len();
         for i in 0..child_len {
-            let some_val = self_instance.children[i].lock().unwrap().clone().input;
-            let k = self_instance.children[i].clone();
-            let keys_primary_required = vec![some_val[0].key, some_val[some_val.len() - 1].key];
+            let some_val = self_instance.children[i].lock().unwrap().clone();
+            let some_val_input = &some_val.input;
+            let keys_primary_required = vec![some_val_input[0].key, some_val_input.last().unwrap().key];
 
             for j in 0..child_len {
                 let some_other_val = self_instance.children[j].lock().unwrap().clone().input;
-                let keys_secondary_required = vec![some_other_val[0].key, some_other_val[some_other_val.len() - 1].key];
+                let keys_secondary_required = vec![some_other_val[0].key, some_other_val.last().unwrap().key];
 
                 if keys_primary_required[0] < keys_secondary_required[0] && keys_primary_required[1] > keys_secondary_required[1] {
-                    self_instance.children.push(k.clone());
+                    let k = Arc::new(Mutex::new(some_val));
+                    self_instance.children.push(k);
                     self_instance.children.remove(i);
                     break
                 }
@@ -177,18 +255,31 @@ impl Node {
 
         let len = self_instance.children.len();
         if len >= 2 {
-            let last_two = &mut self_instance.children[len-2..];
-            last_two.sort_by(|a, b| { a.lock().unwrap().input[0].key.cmp(&b.lock().unwrap().input[0].key) });
+            // Extract keys + original index
+            let mut keyed_nodes: Vec<_> = self_instance.children[len - 2..]
+                .iter()
+                .map(|node| {
+                    let guard = node.lock().unwrap();
+                    (guard.input[0].key, Arc::clone(node)) // clone Arc, not the Node
+                })
+                .collect();
+            // Sort by key
+            keyed_nodes.sort_by(|a, b| a.0.cmp(&b.0));
+
+            // Put back into original children slice
+            for (i, (_, node)) in keyed_nodes.into_iter().enumerate() {
+                self_instance.children[len - 2 + i] = node;
+            }
         }
 
         let mut required_child = vec![self_instance.children[self_instance.children.len()-2].lock().unwrap().clone()];
         required_child.push(self_instance.children[self_instance.children.len()-1].lock().unwrap().clone());
+        
+        let mut guard_one = self_instance.children[self_instance.children.len()-2].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut guard_two = self_instance.children[self_instance.children.len()-1].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        let x = self_instance.children[self_instance.children.len()-2].lock().unwrap().input.len();
-        let y = self_instance.children[self_instance.children.len()-1].lock().unwrap().input.len();
-
-        // HACK: only selected the children with no children of their own to be added under new node.
-        // TODO: Hank no work as most of the time, you need to merge childrens with childrens.
+        let x = guard_one.input.len();
+        let y = guard_two.input.len();
 
         let mut for_x = Vec::new();
         let mut for_y = Vec::new();
@@ -215,21 +306,32 @@ impl Node {
         }
 
         let mut j = 0;
+        let mut to_be_removed_one = Vec::new();
+        let mut to_be_removed_two = Vec::new();
         for _i in 0..self_instance.children.len() - 2 {
             let k = self_instance.children[j].lock().unwrap().clone();
             if k.input[0].key > for_x[0] && k.input[k.input.len() - 1].key < for_x[1] {
-
-                self_instance.children[self_instance.children.len()-2].lock().unwrap().children.push(Arc::new(Mutex::new(k)));
-                self_instance.children.remove(j);
+                guard_one.children.push(Arc::new(Mutex::new(k)));
+                to_be_removed_one.push(j);
+                // self_instance.children.remove(j);
             } else if k.input[0].key > for_y[0] && k.input[k.input.len() - 1].key < for_y[1] {
-                self_instance.children[self_instance.children.len()-1].lock().unwrap().children.push(Arc::new(Mutex::new(k)));
-                self_instance.children.remove(j);
+                guard_two.children.push(Arc::new(Mutex::new(k)));
+                to_be_removed_two.push(j);
+                // self_instance.children.remove(j);
             } else {
                 j += 1;
             }
         }
-        self_instance
+        let mut guard_one_instance: Node = std::mem::take(&mut *guard_one);
+        let mut guard_two_instance: Node = std::mem::take(&mut *guard_two);
+        self_instance.children[len - 1] = Arc::new(Mutex::new(guard_one_instance));
+        self_instance.children[len - 2] = Arc::new(Mutex::new(guard_two_instance));
+
+        let meow = self_instance;
+        
+        meow
     }
+
     fn rank_correction(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut self_instance = self_node;
         self_instance.sort_main_nodes();
@@ -302,6 +404,8 @@ impl Node {
         
         x
     }
+
+
     fn propagate_up(self_node: MutexGuard<Node>, mut child: Node) -> MutexGuard<Node> {
         let mut x = self_node;
         for i in 0..child.input.len() {
@@ -838,17 +942,19 @@ fn main() {
         c = c + 1;
         println!("{} - {}", c, sec);
     }
-    
-/*    println!("Key to be discovered?");
-    let required_key = read_num();
 
-    match Node::key_position(f.clone(),required_key) {
-        Some(x) => {
-            println!("Key found");
-            println!("{:?}", x);
-        }
-        None => println!("Key not found"),
-    }*/
+    println!("{:?}", f.lock().unwrap().print_tree());
+
+    /*    println!("Key to be discovered?");
+        let required_key = read_num();
+    
+        match Node::key_position(f.clone(),required_key) {
+            Some(x) => {
+                println!("Key found");
+                println!("{:?}", x);
+            }
+            None => println!("Key not found"),
+        }*/
 
 /*    for i in 0..100 {
         println!("Keys to be deleted?");
@@ -862,9 +968,9 @@ fn main() {
         println!("{} - {}", k[i].key, k[i].value);
     }*/
     
-    Node::serialize(&f).expect("panic message");
+/*    Node::serialize(&f).expect("panic message");
     Node::deserialize().expect("panic message");
-}
+*/}
 
 fn read_num() -> u32 {
     let mut inp = String::new();
