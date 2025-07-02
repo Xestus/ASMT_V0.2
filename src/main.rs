@@ -18,7 +18,6 @@ struct Items {
     rank: u32,
 }
 #[derive(Debug, Clone)]
-#[derive(Default)]
 struct Node {
     input: Vec<Items>,
     rank: u32,
@@ -272,64 +271,58 @@ impl Node {
             }
         }
 
-        let mut required_child = vec![self_instance.children[self_instance.children.len()-2].lock().unwrap().clone()];
-        required_child.push(self_instance.children[self_instance.children.len()-1].lock().unwrap().clone());
-        
-        let mut guard_one = self_instance.children[self_instance.children.len()-2].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut guard_two = self_instance.children[self_instance.children.len()-1].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-
-        let x = guard_one.input.len();
-        let y = guard_two.input.len();
-
         let mut for_x = Vec::new();
         let mut for_y = Vec::new();
 
-        for i in 0..2 {
-            let mut holder = Vec::new();
-            let k = [x, y][i];
-            if required_child[i].input[k-1].key < self_instance.input[0].key {
-                holder = vec![0, self_instance.input[0].key]
-            } else if required_child[i].input[0].key > self_instance.input[self_instance.input.len() - 1].key {
-                holder = vec![self_instance.input[self_instance.input.len() - 1].key, 1000000000]
-            } else {
-                for j in 0..self_instance.input.len()-1 {
-                    if required_child[i].input[0].key > self_instance.input[j].key && required_child[i].input[k-1].key < self_instance.input[j+1].key {
-                        holder =vec![self_instance.input[j].key, self_instance.input[j+1].key]
+        {
+            let guard_one = self_instance.children[self_instance.children.len() - 2].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let guard_two = self_instance.children[self_instance.children.len() - 1].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+            let x = guard_one.input.len();
+            let y = guard_two.input.len();
+
+
+            let guards = [&guard_one, &guard_two];
+
+            for i in 0..2 {
+                let mut holder = Vec::new();
+                let k = [x, y][i];
+                let guard = guards[i];
+                let require_child = vec![guard.input[0].key, guard.input[k - 1].key];
+                if require_child[1] < self_instance.input.first().unwrap().key {
+                    holder = vec![0, self_instance.input.first().unwrap().key]
+                } else if require_child[0] > self_instance.input.last().unwrap().key {
+                    holder = vec![self_instance.input.last().unwrap().key, 1000000000]
+                } else {
+                    for j in 0..self_instance.input.len() - 1 {
+                        if require_child[0] > self_instance.input[j].key && require_child[1] < self_instance.input[j + 1].key {
+                            holder = vec![self_instance.input[j].key, self_instance.input[j + 1].key]
+                        }
                     }
                 }
-            }
-            match i {
-                0 => for_x = holder,
-                1 => for_y = holder,
-                _ => {}
+                match i {
+                    0 => for_x = holder,
+                    1 => for_y = holder,
+                    _ => {}
+                }
             }
         }
-
         let mut j = 0;
-        let mut to_be_removed_one = Vec::new();
-        let mut to_be_removed_two = Vec::new();
+
         for _i in 0..self_instance.children.len() - 2 {
             let k = self_instance.children[j].lock().unwrap().clone();
             if k.input[0].key > for_x[0] && k.input[k.input.len() - 1].key < for_x[1] {
-                guard_one.children.push(Arc::new(Mutex::new(k)));
-                to_be_removed_one.push(j);
-                // self_instance.children.remove(j);
+                self_instance.children[self_instance.children.len()-2].lock().unwrap().children.push(Arc::new(Mutex::new(k)));
+                self_instance.children.remove(j);
             } else if k.input[0].key > for_y[0] && k.input[k.input.len() - 1].key < for_y[1] {
-                guard_two.children.push(Arc::new(Mutex::new(k)));
-                to_be_removed_two.push(j);
-                // self_instance.children.remove(j);
+                self_instance.children[self_instance.children.len()-1].lock().unwrap().children.push(Arc::new(Mutex::new(k)));
+                self_instance.children.remove(j);
             } else {
                 j += 1;
             }
         }
-        let mut guard_one_instance: Node = std::mem::take(&mut *guard_one);
-        let mut guard_two_instance: Node = std::mem::take(&mut *guard_two);
-        self_instance.children[len - 1] = Arc::new(Mutex::new(guard_one_instance));
-        self_instance.children[len - 2] = Arc::new(Mutex::new(guard_two_instance));
-
-        let meow = self_instance;
         
-        meow
+        self_instance
     }
 
     fn rank_correction(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
