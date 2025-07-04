@@ -77,7 +77,7 @@ impl Node {
             z.input.push(Items {key: k, value: v, rank});
         }
         
-        // Every function takes variable z with datatype MutexGuard<T> because its the default form after .lock().unwrap() on Arc<Mutex<T>>.
+        // Every function takes variable z with datatype MutexGuard<T> because it's the default form after .lock().unwrap() on Arc<Mutex<T>>.
         z = Node::overflow_check(z);
         z = Node::min_size_check(z);
         z.sort_main_nodes();
@@ -167,7 +167,7 @@ impl Node {
         self_instance.input.clear();
         for count in 1..temp_storage.input.len() + 1 {
             if count == breaking_point {
-                self_instance.input.push(temp_storage.input[count-1].clone()); // Push the middle `Item` as sole parent. 
+                self_instance.input.push(temp_storage.input[count-1].clone()); // Push the middle `Item` as sole parent.
             } else if count < breaking_point {
                 struct_one.lock().unwrap().input.push(temp_storage.input[count-1].clone()); // Push the `Items` with keys smaller than middle key onto struct_one.
                 struct_one.lock().unwrap().input[count - 1].rank = temp_storage.rank + 1; // Set the key rank as parent node's rank + 1.
@@ -185,7 +185,8 @@ impl Node {
         
         self_instance.children.push(struct_one);
         self_instance.children.push(struct_two);
-        
+
+
         self_instance
     }
 
@@ -385,11 +386,10 @@ impl Node {
                 j += 1;
             }
         }
-        
+
         self_instance
     }
 
-    
     fn rank_correction(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut self_instance = self_node;
         self_instance.sort_main_nodes();
@@ -436,27 +436,52 @@ impl Node {
         }
         self.sort_main_nodes();
     }
+
+    /// Checks for nodes violating the B-tree invariant `input.len() >= NODE_SIZE/2`
+    /// 
+    /// # How does it happen?
+    /// -  [`Node::split_nodes`] splits the overflowing (`input.len() > NODE_SIZE`) node that demotes non-middle key as children of middle key.
+    /// - The number of middle key is always singular i.e. the node will only have 1 key which violates the B-Tree invariant.
+    /// 
+    /// # Working:
+    /// - The first iterator pushes indices of the current node's child that violates the B-Tree invariant of 
+    ///  `child.input.len() < NODE_SIZE/2 && child.rank > 1` to a temporary storage vector.
+    ///     - Rank of root node is 1 and root node can have 1 key, `child.rank > 1` skips root node.
+    /// - The second iterator reverses the iterator's direction and pushes the parent node and the invariant violator child to [`Node::propagate_up`]
+    ///   that propagates the child & its own children to its parent. 
+    /// - The third iterator re-invokes the current function **if** any child of the current node has children. 
+    /// 
+    /// # Conditions:
+    /// - `child_lock.input.len() < NODE_SIZE/2` still works if the maximum number of node count is either even or odd.
+    ///     - The standard minimum key per node formula is:  `ceil((M + 1)/2) - 1` which gives the same result as `NODE_SIZE/2`.
+    /// - Since [`Node::propagate_up`] removes children from the current node, the iteration is done in reverse
+    ///       order to avoid issues with shifting child indices during removal.
+    /// - The only error [`Node::propagate_up`] will return is a [`std::sync::PoisonError`] that is handled temporarily by [`Result::unwrap_or_else`].
+    ///
+    /// # TODO:
+    /// - Implement safe locking with error handling (replace [`Result::unwrap_or_else`]).
+    /// - Add poison propagation in case of locking errors.
+
     fn min_size_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
-
         let mut x = self_node;
-
+        
         let mut indices_to_propagate = Vec::new();
         for (idx, child) in x.children.iter().enumerate() {
-            let child_lock = child.lock().unwrap();
+            let child_lock = child.lock().unwrap_or_else(|e| e.into_inner());
             if child_lock.input.len() < *NODE_SIZE.get().unwrap() / 2 && child_lock.rank > 1 {
                 indices_to_propagate.push(idx);
             }
         }
 
         for &idx in indices_to_propagate.iter().rev() {
-            let child_clone = x.children[idx].lock().unwrap().clone();
+            let child_clone = x.children[idx].lock().unwrap_or_else(|e| e.into_inner()).clone();
             x = Node::propagate_up(x, child_clone);
         }
 
         for child in &x.children {
-            let mut child_lock = child.lock().unwrap();
+            let child_lock = child.lock().unwrap_or_else(|e| e.into_inner());
             if !child_lock.children.is_empty() {
-                Node::min_size_check(child_lock);
+                let _unused = Node::min_size_check(child_lock);
             }
         }
         
@@ -464,6 +489,70 @@ impl Node {
     }
 
 
+    /// Private function invoked from [`Node::min_size_check`], ensures all node meet the B-Tree invariant of `input.len() >= NODE_SIZE`.
+    ///
+    /// # Invocation:
+    /// - Newly split node has singular key i.e. underfilled nodes (`input.len() < NODE_SIZE`)
+    /// - [`Node::min_size_check`] determines the underfilled nodes and invokes the function.
+    ///
+    /// # Parameters:
+    /// - `self_node`
+    ///     - The parent Node where child's `Items` and children are passed to.
+    ///     - Datatype of `MutexGuard<Node>` to avoid locking the same Mutex<Node> again inside the called function.
+    ///     - `self_node` will have children and grandchildren as verified by [`Node::min_size_check`].
+    /// - `child`
+    ///     - The `Node` which holds `Items` and `Children` to be moved to `self_node`.
+    /// - `child` will have children as a condition from [`Node::min_size_check`] and `child` is a single picked child of `self_node`, hence both of them will at least have a non-empty `input` field.
+    ///
+    /// # Working:
+    /// - First iterator: Moves child's input to parent.
+    ///     - Set the rank of child as parent's rank and is push to parent's input.
+    ///     - Cloning is preferred as struct [`Items`] isn't expensive (28 bytes on 64-bit system)
+    /// - Second iterator: Moves child's child to parent's child.
+    ///     - Push to parent node's `children`.
+    /// - Third iterator: Collect the indices of redundant `child` node from parent in `to_be_removed: Vec<usize>`
+    /// - Fourth iterator: Remove the redundant `child` node from the parent using reverse of `to_be_removed: Vec<usize>` to prevent deadlocks.
+    /// 
+    /// # Conditions:
+    /// - `x.children[i].lock().unwrap()` is safe because:
+    ///     - Only a single lock is held in an instance of time as there is no recursion or nested iterators resulting in not locking the same mutex *again*.
+    ///     - No mutation of `x.children[i]` making it safe from iterator invalidation.
+    /// - [`std::sync::PoisonError`] is a plausible error, handled temporarily by [`Result::unwrap_or_else`] assuming no corruption has occurred.
+    /// - Duplicate keys aren't permittable by default and is handled to only allow unique keys to the B-Tree.
+    /// - General guideline of locking nodes in ascending index order to prevent deadlocks.
+    /// - Indices are collected first to avoid modifying `x.children` during iteration.      
+    /// 
+    /// # Diagram:
+    /// 
+    /// Before (invalid):
+    /// 
+    /// ```
+    /// 
+    ///                 [230]
+    ///                /--╨-\
+    ///               /      \
+    ///              /        \
+    ///     [38, 55, 112]    [661]
+    ///                      /-╨---\
+    ///                     /       \
+    ///                    /         \
+    ///               [353, 513]  [670, 675]
+    /// ```
+    /// 
+    /// After (valid):
+    /// 
+    /// ```
+    ///                  [230, 661]
+    ///                /-----╨-----\
+    ///               /      |      \
+    ///              /       |       \
+    ///     [38, 55, 112] [353, 513] [670, 675]
+    /// ```
+    ///
+    /// # ToDo: (ADD THEM BEFORE CONCURRENCY)
+    /// - Replace [`Result::unwrap_or_else`] with `safe_lock<T>`
+    /// - Propagate poisoning via `Result<MutexGuard<T>, TreeError>`.
+    /// 
     fn propagate_up(self_node: MutexGuard<Node>, mut child: Node) -> MutexGuard<Node> {
         let mut x = self_node;
         for i in 0..child.input.len() {
@@ -471,23 +560,26 @@ impl Node {
             x.input.push(child.input[i].clone());
         }
         for i in 0..child.children.len() {
-            child.children[i].lock().unwrap().rank = x.children[0].lock().unwrap().rank;
-            let k = child.children[i].lock().unwrap().input.len();
-
-            for j in 0..k {
-                child.children[i].lock().unwrap().input[j].rank = x.children[0].lock().unwrap().rank;
-            }
-
-            x.children.push(child.children[i].clone());
+            let meow = Arc::clone(&child.children[i]);
+            x.children.push(meow);
         }
-
+        
+        let conditional_key = child.input[0].key;
+        let mut to_be_removed = Vec::new();
+        
         for i in 0..x.children.len() - 1 {
-            if x.children[i].lock().unwrap().input[0].key == child.input[0].key {
-                x.children.remove(i);
+            let child_guard = x.children[i].lock().unwrap();
+            if child_guard.input[0].key == conditional_key {
+                to_be_removed.push(i);
             }
+        }
+        
+        for i in to_be_removed.iter().rev() {
+            x.children.remove(*i);
         }
         x.sort_main_nodes();
         x.sort_children_nodes();
+        
         x
     }
     
@@ -994,7 +1086,7 @@ fn main() {
     NODE_SIZE.set(4).expect("Failed to set size");
     let mut f = Node::new();
     let mut c = 0;
-    for i in 0..100 {
+    for i in 0..20 {
         let sec = rand::thread_rng().gen_range(1, 1000);
         Node::insert(&mut f, sec, String::from("Woof"));
         c = c + 1;
