@@ -149,6 +149,7 @@ impl Node {
     /// - Even: The middle key splits the node into 2 half, where `number of keys larger than middle key - 1 = number of keys smaller than middle key`
     ///
     /// As the minimum possible designated maximum number of keys per node is 4, cases such as `.input.len()` being 0 or 1 is completely avoided.
+    /// 
     /// TODO: Edge Cases such as: Mutex for `struct_one` and `struct_two` being poisoned.
     ///
     fn split_nodes(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
@@ -210,7 +211,7 @@ impl Node {
     /// Variable `_unused` is safe because the guard is automatically dropped when the variable goes out of scope and the variable goes out of scope right after it is declared.
     ///
     /// There will be no deadlocks on iteration due to usage of variable `temporary_guard` which breaks
-    /// `Circular wait` of `Coffman's conditions` and every thread will access children in the given order.
+    /// **Circular wait** of **Coffman's conditions** and every thread will access children in the given order.
     ///
     /// Variable `temporary_guard` *can* be poisoned but the value of MutexGuard<Node> will be extracted by `unwrap_or_else(...)`.
     /// It's a patchy solution but stay till I add find better solution while redesigning system concurrent.
@@ -228,34 +229,90 @@ impl Node {
 
         self_instance
     }
-
-
+    
+    
+    /// A private function exclusively invoked from `fn tree_integrity_check`.
+    /// 
+    /// Its invoked if the temporary B-Tree structure violates the fundamental B-Tree property:
+    /// - For non-leaf nodes, `children.len() == input.len() + 1`.
+    ///
+    /// That occurs due to the internal node's key count exceeding the maximum designated size,
+    ///  it causes the node to split, forcing its non-middle key to be added as two children.
+    /// 
+    /// The first double for loop iteration is used to compare the first and the last keys of every node with the other to discover and place overlapping node
+    /// (Node whose first key subceeds and last key exceeds at least one other node's first key and last key respectively) on the last 2 indices where the 
+    /// overlapping nodes are to be used as parent nodes for the rest of the children. 
+    /// 
+    /// It's a temporary brute-force solution with some unnecessary cloning.
+    /// `Naïve O(N²)` algorithm *is* inefficient in comparison to `O(N Log N)` but is used as a placeholder to be replaced with (maybe) Sweep Line Algorithm. 
+    /// 
+    /// Its tolerable now as the maximum number of keys per node is relatively small.
+    /// 
+    /// The last 2 overlapping nodes are sorted by first key on ascending order by preloading the keys to `key_nodes`, sorting them and placing them back 
+    /// to original child node which prevents deadlocking during sorting.
+    /// 
+    /// Only the last 2 children are sorted because the last two children are assumed to be the new parent for rest of the children.
+    /// 
+    /// Other children are assumed to be sorted and satisfy the B-Tree ordering policy.
+    ///
+    /// `unwrap_or_else()` is a temporary duct taped-error handling to be replaced with a `safe_lock<T>` wrapper and/or integrity check with match whenever deemed necessary.
+    ///
+    /// 
+    /// .
+    ///
+    /// Before (invalid):  
+    /// ```text  
+    ///                                [754]  
+    ///    -----------------------------|---------------------------  
+    ///   /       |         |           |          |        |        \  
+    /// [7,9] [410,480] [615,627] [786,809] [847,879] [940,942] [365,577] [839,881]  
+    /// ```  
+    /// After (valid):  
+    /// ```text  
+    ///                                      [754]
+    ///                        /---------------╨-----------\
+    ///                       /                             \
+    ///                      /                               \
+    ///                 [365, 577]                         [839, 881]
+    ///         /---------╨--------\                    /-----╨--------\
+    ///        /          |         \                  /      |         \
+    ///       /           |          \                /       |          \
+    /// [7, 9, 331]  [410, 480]  [615, 627]     [786, 809] [847, 879]   [940, 942]
+    /// ```
+    /// # TODO:
+    /// - Replace brute-force overlap detection with sweep-line (reduce from O(N²) to O(N log N)).
+    /// - Implement safe locking with error handling (replace `unwrap_or_else`).
+    /// - Add poison propagation in case of locking errors.
     fn fix_child_count_mismatch(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut self_instance = self_node;
 
         let child_len = self_instance.children.len();
+        
         for i in 0..child_len {
+            // The children cannot be empty as only the nodes with children not empty can invoke the function (!self_instance.children.is_empty())
             let some_val = self_instance.children[i].lock().unwrap().clone();
             let some_val_input = &some_val.input;
             let keys_primary_required = vec![some_val_input[0].key, some_val_input.last().unwrap().key];
-
             for j in 0..child_len {
-                let some_other_val = self_instance.children[j].lock().unwrap().clone().input;
-                let keys_secondary_required = vec![some_other_val[0].key, some_other_val.last().unwrap().key];
+                let some_other_val = self_instance.children[j].lock().unwrap().clone();
+                let some_other_val_input = &some_other_val.input;
+                let keys_secondary_required = vec![some_other_val_input[0].key, some_other_val_input.last().unwrap().key];
 
+                // Checks for overlapping node.
                 if keys_primary_required[0] < keys_secondary_required[0] && keys_primary_required[1] > keys_secondary_required[1] {
                     let k = Arc::new(Mutex::new(some_val));
-                    self_instance.children.push(k);
-                    self_instance.children.remove(i);
+                    self_instance.children.push(k); // Pushes the overlapping node to the last index.
+                    self_instance.children.remove(i); // Removes the unnecessary overlapping node.
                     break
                 }
             }
         }
 
+
         let len = self_instance.children.len();
         if len >= 2 {
             // Extract keys + original index
-            let mut keyed_nodes: Vec<_> = self_instance.children[len - 2..]
+            let mut key_nodes: Vec<_> = self_instance.children[len - 2..]
                 .iter()
                 .map(|node| {
                     let guard = node.lock().unwrap();
@@ -263,58 +320,65 @@ impl Node {
                 })
                 .collect();
             // Sort by key
-            keyed_nodes.sort_by(|a, b| a.0.cmp(&b.0));
+            key_nodes.sort_by(|a, b| a.0.cmp(&b.0));
 
             // Put back into original children slice
-            for (i, (_, node)) in keyed_nodes.into_iter().enumerate() {
+            for (i, (_, node)) in key_nodes.into_iter().enumerate() {
                 self_instance.children[len - 2 + i] = node;
             }
         }
 
-        let mut for_x = Vec::new();
-        let mut for_y = Vec::new();
-
+        let mut parent_one_child_boundary = Vec::new();
+        let mut parent_two_child_boundary = Vec::new();
+        
+        // Snippet placed inside a code block because `guard_parent_one` and `guard_parent_two` takes an immutable reference. 
         {
-            let guard_one = self_instance.children[self_instance.children.len() - 2].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let guard_two = self_instance.children[self_instance.children.len() - 1].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let guard_parent_one = self_instance.children[self_instance.children.len() - 2].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let guard_parent_two = self_instance.children[self_instance.children.len() - 1].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
-            let x = guard_one.input.len();
-            let y = guard_two.input.len();
+            let new_parent_one_length = guard_parent_one.input.len();
+            let new_parent_two_length = guard_parent_two.input.len();
 
+            
+            let guards = [&guard_parent_one, &guard_parent_two];
 
-            let guards = [&guard_one, &guard_two];
-
+            // Assigns the minimum and maximum limit that the keys must fall to be placed as child for either of two new parents to parent_X_child_boundary.
             for i in 0..2 {
-                let mut holder = Vec::new();
-                let k = [x, y][i];
+                let mut placeholder = Vec::new();
+                // `i` being 1 and 2 assigns `new_parent_one_length` and `new_parent_two_length` to `k` respectively.
+                let k = [new_parent_one_length, new_parent_two_length][i];
+                // `i` being 1 and 2 assigns `guard_parent_one` and `guard_parent_two` to `k` respectively.
                 let guard = guards[i];
                 let require_child = vec![guard.input[0].key, guard.input[k - 1].key];
+                
                 if require_child[1] < self_instance.input.first().unwrap().key {
-                    holder = vec![0, self_instance.input.first().unwrap().key]
+                    placeholder = vec![0, self_instance.input.first().unwrap().key]
                 } else if require_child[0] > self_instance.input.last().unwrap().key {
-                    holder = vec![self_instance.input.last().unwrap().key, 1000000000]
+                    placeholder = vec![self_instance.input.last().unwrap().key, u32::MAX]
                 } else {
                     for j in 0..self_instance.input.len() - 1 {
                         if require_child[0] > self_instance.input[j].key && require_child[1] < self_instance.input[j + 1].key {
-                            holder = vec![self_instance.input[j].key, self_instance.input[j + 1].key]
+                            placeholder = vec![self_instance.input[j].key, self_instance.input[j + 1].key]
                         }
                     }
                 }
+                // Assigns either of parent_X_child_boundary vector the minimum and maximum limit stored in a temporary placeholder according to value of `i`.
                 match i {
-                    0 => for_x = holder,
-                    1 => for_y = holder,
+                    0 => parent_one_child_boundary = placeholder,
+                    1 => parent_two_child_boundary = placeholder,
                     _ => {}
                 }
             }
         }
         let mut j = 0;
 
+        // Remove the selected `Items` from child of selected node to its grandchild. 
         for _i in 0..self_instance.children.len() - 2 {
             let k = self_instance.children[j].lock().unwrap().clone();
-            if k.input[0].key > for_x[0] && k.input[k.input.len() - 1].key < for_x[1] {
+            if k.input[0].key > parent_one_child_boundary[0] && k.input[k.input.len() - 1].key < parent_one_child_boundary[1] {
                 self_instance.children[self_instance.children.len()-2].lock().unwrap().children.push(Arc::new(Mutex::new(k)));
                 self_instance.children.remove(j);
-            } else if k.input[0].key > for_y[0] && k.input[k.input.len() - 1].key < for_y[1] {
+            } else if k.input[0].key > parent_two_child_boundary[0] && k.input[k.input.len() - 1].key < parent_two_child_boundary[1] {
                 self_instance.children[self_instance.children.len()-1].lock().unwrap().children.push(Arc::new(Mutex::new(k)));
                 self_instance.children.remove(j);
             } else {
@@ -325,6 +389,7 @@ impl Node {
         self_instance
     }
 
+    
     fn rank_correction(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut self_instance = self_node;
         self_instance.sort_main_nodes();
