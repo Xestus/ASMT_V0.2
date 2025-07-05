@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use crate::rand::Rng;
 use std::io::{BufRead, BufReader, Write};
 extern crate rand;
@@ -7,6 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fs::{File, OpenOptions};
+use std::rc::Rc;
 use regex::Regex;
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
@@ -97,6 +99,7 @@ impl Node {
         z = Node::rank_correction(z);
         z.sort_everything();
 
+        let k = RefCell::new("MEOW");
     }
     
     /// A maintenance function responsible for checking overflows on designated nodes.
@@ -112,20 +115,33 @@ impl Node {
     /// But both the `.unwrap()` are safe, I think.
     /// 
     /// - MutexGuard<Node> was used as both return and parameter because it allows reuse during recursion without relocking.
-    fn overflow_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
-        let mut x = self_node;
-        
-        // If the current node has more keys than the maximum limit, invoke `split_nodes` function.
-        if x.input.len() > *NODE_SIZE.get().unwrap() {
-            x = Node::split_nodes(x);
-        } else if !x.children.is_empty() {
-            // If child node exists, recursively check for any node overflow.
-            for i in 0..x.children.len() {
-                let _unused = Node::overflow_check(x.children[i].lock().unwrap());
-            }
+    fn overflow_check(mut root: MutexGuard<Node>) -> MutexGuard<Node> {
+        let mut stack = Vec::new();
+
+        if root.input.len() > *NODE_SIZE.get().unwrap() {
+            return Node::split_nodes(root);
         }
-        x
+
+        for child in &root.children {
+            stack.push(Arc::clone(child));
+        }
+
+        while let Some(node) = stack.pop() {
+            let current = node.lock().unwrap();
+            if current.input.len() > *NODE_SIZE.get().unwrap() {
+                let _unused =  Node::split_nodes(current);
+            } else if !current.children.is_empty() {
+                for child in &current.children {
+                    stack.push(Arc::clone(child));
+                }
+            }
+
+        }
+
+        root
+
     }
+
     
     /// A private function exclusively invoked from `fn overflow_check` only if the selected node is overflowing i.e. The number of keys on the selected node
     /// exceeds maximum pre-defined threshold.
@@ -216,21 +232,30 @@ impl Node {
     ///
     /// Variable `temporary_guard` *can* be poisoned but the value of MutexGuard<Node> will be extracted by `unwrap_or_else(...)`.
     /// It's a patchy solution but stay till I add find better solution while redesigning system concurrent.
-    fn tree_integrity_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
-        let mut self_instance = self_node;
-        if self_instance.input.len() + 1 != self_instance.children.len() && !self_instance.children.is_empty() {
-            self_instance = Node::fix_child_count_mismatch(self_instance);
+    fn tree_integrity_check(mut self_node: MutexGuard<Node>) -> MutexGuard<Node> {
+        let mut stack: Vec<Arc<Mutex<Node>>> = Vec::new();
 
-        } else if !self_instance.children.is_empty() {
-            for i in 0..self_instance.children.len() {
-                let temporary_guard = self_instance.children[i].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                let _unused = Node::tree_integrity_check(temporary_guard);
-            }
+        if self_node.input.len() + 1 != self_node.children.len() && !self_node.children.is_empty() {
+            return Node::fix_child_count_mismatch(self_node);
         }
 
-        self_instance
+        for child in &self_node.children {
+            stack.push(Arc::clone(child));
+        }
+
+        while let Some(node) = stack.pop() {
+            let current = node.lock().unwrap();
+
+            if current.input.len() + 1 != current.children.len() && !current.children.is_empty() {
+                let _unused = Node::fix_child_count_mismatch(current);
+            } else if !current.children.is_empty() {
+                for child in &current.children {
+                    stack.push(Arc::clone(child));
+                }
+            }
+        }
+        self_node
     }
-    
     
     /// A private function exclusively invoked from `fn tree_integrity_check`.
     /// 
@@ -286,7 +311,6 @@ impl Node {
     /// - Add poison propagation in case of locking errors.
     fn fix_child_count_mismatch(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut self_instance = self_node;
-
         let child_len = self_instance.children.len();
         
         for i in 0..child_len {
@@ -386,7 +410,6 @@ impl Node {
                 j += 1;
             }
         }
-
         self_instance
     }
 
@@ -401,7 +424,8 @@ impl Node {
                 for j in 0..len {
                     self_instance.children[i].lock().unwrap().input[j].rank = self_instance.rank + 1;
                 }
-                Node::rank_correction(self_instance.children[i].lock().unwrap());
+
+                let _unused = Node::rank_correction(self_instance.children[i].lock().unwrap());
             }
         }
 
@@ -461,7 +485,6 @@ impl Node {
     /// # TODO:
     /// - Implement safe locking with error handling (replace [`Result::unwrap_or_else`]).
     /// - Add poison propagation in case of locking errors.
-
     fn min_size_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut x = self_node;
         
@@ -520,10 +543,10 @@ impl Node {
     /// - [`std::sync::PoisonError`] is a plausible error, handled temporarily by [`Result::unwrap_or_else`] assuming no corruption has occurred.
     /// - Duplicate keys aren't permittable by default and is handled to only allow unique keys to the B-Tree.
     /// - General guideline of locking nodes in ascending index order to prevent deadlocks.
-    /// - Indices are collected first to avoid modifying `x.children` during iteration.      
-    /// 
+    /// - Indices are collected first to avoid modifying `x.children` during iteration.
+    ///
     /// # Diagram:
-    /// 
+    ///
     /// Before (invalid):
     /// 
     /// ```
@@ -552,7 +575,7 @@ impl Node {
     /// # ToDo: (ADD THEM BEFORE CONCURRENCY)
     /// - Replace [`Result::unwrap_or_else`] with `safe_lock<T>`
     /// - Propagate poisoning via `Result<MutexGuard<T>, TreeError>`.
-    /// 
+    ///
     fn propagate_up(self_node: MutexGuard<Node>, mut child: Node) -> MutexGuard<Node> {
         let mut x = self_node;
         for i in 0..child.input.len() {
@@ -563,23 +586,23 @@ impl Node {
             let meow = Arc::clone(&child.children[i]);
             x.children.push(meow);
         }
-        
+
         let conditional_key = child.input[0].key;
         let mut to_be_removed = Vec::new();
-        
+
         for i in 0..x.children.len() - 1 {
             let child_guard = x.children[i].lock().unwrap();
             if child_guard.input[0].key == conditional_key {
                 to_be_removed.push(i);
             }
         }
-        
+
         for i in to_be_removed.iter().rev() {
             x.children.remove(*i);
         }
         x.sort_main_nodes();
         x.sort_children_nodes();
-        
+
         x
     }
     
@@ -601,26 +624,72 @@ impl Node {
         }
     }
 
+    /// Searches selected key from a pre-defined B-Tree. If found, returns [`Option::Some(Items)`].
+    /// Iterative method was chosen rather than recursive as:
+    /// - The stack based function holds one lock at a time, preventing deadlocks.
+    /// - Prevents stack overflow and poor stability.
+    /// - Easier integration of concurrency + persistence.
+    ///
+    /// # Working:
+    /// - Pushes the pre-defined B-Tree into `stack: Vec<Arc<Mutex<Node>>>`.
+    /// - Picks the last `Arc<Mutex<Node>>` from `stack`.
+    /// - Using iteration, if any key from the picked node matches the selected key, the [`Items`] is returned.
+    ///     - [`Items`] is decently cheap to clone as its 32 bytes in size.
+    /// - Pushes the selected node via key range comparison to `stack` and repeats till the key is found.
+    /// - Returns a [`None`] if  the key isn't found.
+    ///
+    /// # Condition:
+    /// - Every key is sorted by ascending as [`Node::sort_everything`] is invoked before invoking [`Node::key_position`].
+    /// - Nodes are locked depth first, left to right. 
+    /// - [`std::sync::PoisonError`] is a plausible error, handled temporarily by [`Result::unwrap_or_else`] assuming no corruption has occurred.
+    /// - [`Rc<RefCell<T>>`] isn't preferred because they're not for concurrent access across multiple threads. 
+    /// - Root, Branch and Internal nodes, all of them will provide a valid result.
+    /// 
+    /// # Examples
+    /// ```rust
+    /// // Assume you have a B-tree with a key 1 on rank 2 with value "Woof".
+    ///
+    /// let result = Node::key_position(new_node.clone(), required_key);
+    /// assert_eq!(result, Some(Items { key: 1, value: String::from("Woof"), rank: 2 }));
+    /// ```
+    ///
+    /// ```rust
+    /// // Assume you have a B-Tree without the entered key.
+    /// 
+    /// let result = Node::key_position(new_node.clone(), required_key);
+    /// assert_eq!(result, None);
+    /// ```
+    /// 
+    /// # TODO + WARNING:
+    /// - THE SYSTEM CURRENTLY ISN'T CONCURRENT BUT IS CONCURRENCY IS THE NEXT FEATURE TO BE ADDED AFTER WRITE AHEAD LOGIN. PLEASE FORGIVE ME.
+    /// - CASES WITH READER/WRITER COLLISION WILL BE HANDLED WITH REPLACEMENT OF MUTEX WITH RWLOCK, DEPENDING UPON NEED. 
     fn key_position(node: Arc<Mutex<Node>>, key: u32) -> Option<Items> {
-        let mut node_instance = node.lock().unwrap();
-        for i in 0..node_instance.input.len() {
-            if node_instance.input[i].key == key {
-                return Some(node_instance.input[i].clone());
-            }
-        }
+        let mut stack: Vec<Arc<Mutex<Node>>> = Vec::new();
+        stack.push(node);
 
-        if key < node_instance.input[0].key {
-            return Node::key_position(node_instance.children[0].clone(), key);
-        } else if key > node_instance.input[node_instance.input.len()-1].key {
-            return Node::key_position(node_instance.children[node_instance.children.len()-1].clone(), key);
-        } else {
-            for i in 0..node_instance.input.len() - 1 {
-                if key > node_instance.input[i].key && key < node_instance.input[i+1].key {
-                    return Node::key_position(node_instance.children[i+1].clone(), key);
+        while let Some(node) = stack.pop() {
+            let current = node.lock().unwrap_or_else(|e| e.into_inner());
+
+            for i in 0..current.input.len() {
+                if current.input[i].key == key {
+                    return Some(current.input[i].clone());
+                }
+            }
+
+            if !current.children.is_empty() {
+                if key < current.input[0].key {
+                    stack.push(Arc::clone(&current.children[0]));
+                } else if key > current.input[current.input.len()-1].key {
+                    stack.push(Arc::clone(&current.children[current.children.len()-1]));
+                } else {
+                    for i in 0..current.input.len() - 1 {
+                        if key > current.input[i].key && key < current.input[i+1].key {
+                            stack.push(Arc::clone(&current.children[i+1]));
+                        }
+                    }
                 }
             }
         }
-
         None
     }
     
@@ -1084,41 +1153,60 @@ impl Node {
 fn main() {
 
     NODE_SIZE.set(4).expect("Failed to set size");
-    let mut f = Node::new();
+    let mut new_node = Node::new();
     let mut c = 0;
-    for i in 0..20 {
+/*    for i in 0..50 {
         let sec = rand::thread_rng().gen_range(1, 1000);
-        Node::insert(&mut f, sec, String::from("Woof"));
+        Node::insert(&mut new_node, sec, String::from("Woof"));
         c = c + 1;
         println!("{} - {}", c, sec);
-    }
-
-    println!("{:?}", f.lock().unwrap().print_tree());
-
-    /*    println!("Key to be discovered?");
-        let required_key = read_num();
+    }*/
     
-        match Node::key_position(f.clone(),required_key) {
+    
+
+    Node::insert(&mut new_node, 1, String::from("Woof"));
+    Node::insert(&mut new_node, 2, String::from("Woof"));
+    Node::insert(&mut new_node, 3, String::from("Woof"));
+    Node::insert(&mut new_node, 4, String::from("Woof"));
+    Node::insert(&mut new_node, 5, String::from("Woof"));
+    Node::insert(&mut new_node, 6, String::from("Woof"));
+    Node::insert(&mut new_node, 7, String::from("Woof"));
+    Node::insert(&mut new_node, 8, String::from("Woof"));
+    Node::insert(&mut new_node, 9, String::from("Woof"));
+    Node::insert(&mut new_node, 10, String::from("Woof"));
+    Node::insert(&mut new_node, 11, String::from("Woof"));
+    Node::insert(&mut new_node, 12, String::from("Woof"));
+    Node::insert(&mut new_node, 13, String::from("Woof"));
+    Node::insert(&mut new_node, 14, String::from("Woof"));
+    Node::insert(&mut new_node, 15, String::from("Woof"));
+
+    println!("{:?}", new_node.lock().unwrap().print_tree());
+
+    println!("Key to be discovered?");
+    let required_key = read_num();
+
+
+        match Node::key_position(new_node.clone(), required_key) {
             Some(x) => {
                 println!("Key found");
                 println!("{:?}", x);
             }
             None => println!("Key not found"),
-        }*/
+        }
 
 /*    for i in 0..100 {
         println!("Keys to be deleted?");
         let required_key = read_num();
-        Node::remove_key(&mut f, required_key);
-        println!("{:?}", f.lock().unwrap().print_tree());
-    }*/
+        Node::remove_key(&mut new_node, required_key);
+        println!("{:?}", new_node.lock().unwrap().print_tree());
+    }
     
-/*    let k = Node::all_keys_ordered(&mut f);
+    let k = Node::all_keys_ordered(&mut new_node);
     for i in 0..k.len() {
         println!("{} - {}", k[i].key, k[i].value);
-    }*/
+    }
     
-/*    Node::serialize(&f).expect("panic message");
+    Node::serialize(&new_node).expect("panic message");
     Node::deserialize().expect("panic message");
 */}
 
