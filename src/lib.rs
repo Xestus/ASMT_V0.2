@@ -13,6 +13,32 @@ Node::insert(&mut f, 12, String::from("Woof"));
 Node::insert(&mut f, 13, String::from("Woof"));
 Node::insert(&mut f, 14, String::from("Woof"));
 Node::insert(&mut f, 15, String::from("Woof"));
+
+
+    fn key_position(node: Arc<Mutex<Node>>, key: u32) -> Option<Items> {
+        let node_instance = node.lock().unwrap();
+        for i in 0..node_instance.input.len() {
+            if node_instance.input[i].key == key {
+                return Some(node_instance.input[i].clone());
+            }
+        }
+
+        if key < node_instance.input[0].key {
+            return Node::key_position(Arc::clone(&node_instance.children[0]), key);
+        } else if key > node_instance.input[node_instance.input.len()-1].key {
+            return Node::key_position(Arc::clone(&node_instance.children[node_instance.children.len()-1]), key);
+        } else {
+            for i in 0..node_instance.input.len() - 1 {
+                if key > node_instance.input[i].key && key < node_instance.input[i+1].key {
+                    return Node::key_position(Arc::clone(&node_instance.children[i+1]), key);
+                }
+            }
+        }
+
+        None
+    }
+
+    
 */
 
 

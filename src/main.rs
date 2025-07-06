@@ -7,9 +7,13 @@ use std::io;
 use std::sync::{Arc, Mutex, MutexGuard};
 use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::fs::{File, OpenOptions};
 use std::rc::Rc;
 use regex::Regex;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom};
+use std::mem::zeroed;
+use std::path::Path;
+
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
 
@@ -25,7 +29,6 @@ struct Node {
     rank: u32,
     children: Vec<Arc<Mutex<Node>>>,
 }
-
 
 #[derive(Debug)]
 enum U32OrString {
@@ -67,9 +70,11 @@ impl Node {
         instance
     }
 
+    
+    
     // Insert the K-V into the empty node.
     // Todo: Understand why i had to call every function 3 times for correct functioning.
-    fn insert(self_node: &mut Arc<Mutex<Node>>, k: u32, v: String) {
+    fn insert(self_node: &mut Arc<Mutex<Node>>, k: u32, v: String) -> io::Result<()> {
         let mut z = self_node.try_lock().unwrap();
         let rank = z.rank;
         if !z.children.is_empty() {
@@ -99,7 +104,7 @@ impl Node {
         z = Node::rank_correction(z);
         z.sort_everything();
 
-        let k = RefCell::new("MEOW");
+        Ok(())
     }
     
     /// A maintenance function responsible for checking overflows on designated nodes.
@@ -914,7 +919,7 @@ impl Node {
         }
     }
 
-    fn deserialize() -> io::Result<()> {
+    fn deserialize() -> io::Result<(Node)> {
         let file = File::open("example.txt")?;
         let read = BufReader::new(file);
 
@@ -1054,7 +1059,7 @@ impl Node {
         println!("###############################################");
 
 
-        Ok(())
+        Ok(k)
     }
 
     fn deserialized_with_relation(required_node: DeserializedNode, node_vec:&mut  Vec<DeserializedNode>) -> UltraDeserialized {
@@ -1148,9 +1153,82 @@ impl Node {
         new_node
     }
 
+    fn wal(mut file: &File, mut self_node: &mut Arc<Mutex<Node>>, k: u32, v: String) -> io::Result<()> {
+        write!(file, "{:?} {:?} ", k, v).expect("TODO: panic message");
+
+        file.sync_all()?;
+
+        let result = Node::insert(&mut self_node, k, v);
+        match result {
+            Ok(()) => {
+                let serialization_result = Node::serialize(self_node);
+                match serialization_result {
+                    Ok(()) => {
+                        writeln!(file, "COMPLETED")?;
+                        file.sync_all()?;
+                    }
+                    Err(e) => {
+                        writeln!(file, "FAILED")?;
+                        file.sync_all()?;
+                        println!("Err: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                writeln!(file, "FAILED")?;
+                file.sync_all()?;
+                println!("Err: {}", e);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn crash_recovery() -> io::Result<()> {
+        let file = File::open("WAL.txt")?;
+        let read = BufReader::new(file);
+
+        let mut meow = Vec::new();
+
+        for contents in read.lines() {
+            let mut contents_individual : Vec<String> = Vec::new();
+            match contents {
+                Ok(content) => {
+                    for line in content.split_whitespace() {
+                        contents_individual.push(line.to_string());
+                    }
+
+                }
+                Err(e) => {
+                    println!("FAILED: {}", e);
+                }
+            }
+
+            if contents_individual.len() == 2 {
+                meow.push(vec![contents_individual[0].clone(), contents_individual[1].clone()]);
+            }
+        }
+
+        let node =  Node::deserialize().unwrap();
+
+        let mut arc_node = Arc::new(Mutex::new(node));
+        for i in meow.iter() {
+            let k = i[0].parse::<u32>().unwrap();
+            let z = Arc::clone(&arc_node);
+            let result =  Node::key_position(z, k);
+            
+            if result.is_none() {
+                Node::insert(&mut arc_node, i[0].parse().unwrap(), i[1].clone()).expect("TODO: panic message");
+            }
+        }
+        let zas = arc_node.lock().unwrap();
+        
+        println!("{:?}",zas.print_tree() );
+        Ok(())
+    }
 }
 
-fn main() {
+fn main() -> io::Result<()> {
 
     NODE_SIZE.set(4).expect("Failed to set size");
     let mut new_node = Node::new();
@@ -1161,28 +1239,36 @@ fn main() {
         c = c + 1;
         println!("{} - {}", c, sec);
     }*/
-    
-    
 
-    Node::insert(&mut new_node, 1, String::from("Woof"));
-    Node::insert(&mut new_node, 2, String::from("Woof"));
-    Node::insert(&mut new_node, 3, String::from("Woof"));
-    Node::insert(&mut new_node, 4, String::from("Woof"));
-    Node::insert(&mut new_node, 5, String::from("Woof"));
-    Node::insert(&mut new_node, 6, String::from("Woof"));
-    Node::insert(&mut new_node, 7, String::from("Woof"));
-    Node::insert(&mut new_node, 8, String::from("Woof"));
-    Node::insert(&mut new_node, 9, String::from("Woof"));
-    Node::insert(&mut new_node, 10, String::from("Woof"));
-    Node::insert(&mut new_node, 11, String::from("Woof"));
-    Node::insert(&mut new_node, 12, String::from("Woof"));
-    Node::insert(&mut new_node, 13, String::from("Woof"));
-    Node::insert(&mut new_node, 14, String::from("Woof"));
-    Node::insert(&mut new_node, 15, String::from("Woof"));
+
+/*    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open("WAL.txt")?;
+
+
+    Node::wal(&file, &mut new_node, 1, String::from("Woof"));
+    Node::wal(&file, &mut new_node,2, String::from("Woof"));
+    Node::wal(&file, &mut new_node,3, String::from("Woof"));
+    Node::wal(&file, &mut new_node,4, String::from("Woof"));
+    Node::wal(&file, &mut new_node,5, String::from("Woof"));
+    Node::wal(&file, &mut new_node,6, String::from("Woof"));
+    Node::wal(&file, &mut new_node,7, String::from("Woof"));
+    Node::wal(&file, &mut new_node,8, String::from("Woof"));
+    Node::wal(&file, &mut new_node,9, String::from("Woof"));
+    Node::wal(&file, &mut new_node,10, String::from("Woof"));
+    Node::wal(&file, &mut new_node,11, String::from("Woof"));
+    Node::wal(&file, &mut new_node,12, String::from("Woof"));
+    Node::wal(&file, &mut new_node,13, String::from("Woof"));
+    Node::wal(&file, &mut new_node,14, String::from("Woof"));
+    Node::wal(&file, &mut new_node,15, String::from("Woof"));
+
 
     println!("{:?}", new_node.lock().unwrap().print_tree());
+*/
 
-    println!("Key to be discovered?");
+/*    println!("Key to be discovered?");
     let required_key = read_num();
 
 
@@ -1192,7 +1278,7 @@ fn main() {
                 println!("{:?}", x);
             }
             None => println!("Key not found"),
-        }
+        }*/
 
 /*    for i in 0..100 {
         println!("Keys to be deleted?");
@@ -1208,7 +1294,13 @@ fn main() {
     
     Node::serialize(&new_node).expect("panic message");
     Node::deserialize().expect("panic message");
-*/}
+*/
+
+
+    Node::crash_recovery()?;
+
+    Ok(())    
+}
 
 fn read_num() -> u32 {
     let mut inp = String::new();
