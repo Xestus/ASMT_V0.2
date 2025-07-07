@@ -3,7 +3,7 @@ use crate::rand::Rng;
 use std::io::{BufRead, BufReader, Write};
 extern crate rand;
 
-use std::io;
+use std::{io, thread};
 use std::sync::{Arc, Mutex, MutexGuard};
 use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -69,13 +69,11 @@ impl Node {
         }));
         instance
     }
-
-    
     
     // Insert the K-V into the empty node.
     // Todo: Understand why i had to call every function 3 times for correct functioning.
-    fn insert(self_node: &mut Arc<Mutex<Node>>, k: u32, v: String) -> io::Result<()> {
-        let mut z = self_node.try_lock().unwrap();
+    fn insert(self_node: MutexGuard<Node>, k: u32, v: String) -> io::Result<()> {
+        let mut z = self_node;
         let rank = z.rank;
         if !z.children.is_empty() {
             z.add_child_key(Items {key: k, value: v.clone(), rank});
@@ -83,16 +81,17 @@ impl Node {
         else {
             z.input.push(Items {key: k, value: v, rank});
         }
-        
-        // Every function takes variable z with datatype MutexGuard<T> because it's the default form after .lock().unwrap() on Arc<Mutex<T>>.
         z = Node::overflow_check(z);
         z = Node::min_size_check(z);
         z.sort_main_nodes();
         z.sort_children_nodes();
         z = Node::tree_integrity_check(z);
+
         z = Node::min_size_check(z);
         
         z = Node::overflow_check(z);
+
+
         z = Node::min_size_check(z);
         z.sort_main_nodes();
         z = Node::tree_integrity_check(z);
@@ -882,7 +881,7 @@ impl Node {
         }
     }
     
-    fn serialize(node: &Arc<Mutex<Node>>) -> io::Result<()>  {
+    fn serialize(node: Arc<Mutex<Node>>) -> io::Result<()>  {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -894,7 +893,7 @@ impl Node {
         Ok(())
     }
     
-    fn serialization(node: &Arc<Mutex<Node>>, file: &mut File) {
+    fn serialization(node: Arc<Mutex<Node>>, file: &mut File) {
         let node_instance = node.lock().unwrap();
 
         let l = node_instance.input.len();
@@ -913,9 +912,11 @@ impl Node {
 
         if !node_instance.children.is_empty() {
             for i in 0..node_instance.input.len() {
-                Node::serialization(&node_instance.children[i], file);
+                let k = Arc::clone(&node_instance.children[i]);
+                Node::serialization(k, file);
             }
-            Node::serialization(&node_instance.children[node_instance.input.len()], file);
+            let j = Arc::clone(&node_instance.children[node_instance.input.len()-1]);
+            Node::serialization(j, file);
         }
     }
 
@@ -1153,15 +1154,16 @@ impl Node {
         new_node
     }
 
-    fn wal(mut file: &File, mut self_node: &mut Arc<Mutex<Node>>, k: u32, v: String) -> io::Result<()> {
+    fn wal(mut file: &File, self_node:Arc<Mutex<Node>>, k: u32, v: String) -> io::Result<()> {
         write!(file, "{:?} {:?} ", k, v).expect("TODO: panic message");
 
         file.sync_all()?;
-
-        let result = Node::insert(&mut self_node, k, v);
+        let clone_node = Arc::clone(&self_node);
+        let guard = self_node.lock().unwrap();
+        let result = Node::insert(guard, k, v);
         match result {
             Ok(()) => {
-                let serialization_result = Node::serialize(self_node);
+                let serialization_result = Node::serialize(clone_node);
                 match serialization_result {
                     Ok(()) => {
                         writeln!(file, "COMPLETED")?;
@@ -1213,12 +1215,14 @@ impl Node {
 
         let mut arc_node = Arc::new(Mutex::new(node));
         for i in meow.iter() {
+            // let cloned_node = Arc::clone(&arc_node);
             let k = i[0].parse::<u32>().unwrap();
             let z = Arc::clone(&arc_node);
             let result =  Node::key_position(z, k);
             
             if result.is_none() {
-                Node::insert(&mut arc_node, i[0].parse().unwrap(), i[1].clone()).expect("TODO: panic message");
+                let guard = arc_node.lock().unwrap();
+                Node::insert(guard, i[0].parse().unwrap(), i[1].clone()).expect("TODO: panic message");
             }
         }
         let zas = arc_node.lock().unwrap();
@@ -1232,13 +1236,51 @@ fn main() -> io::Result<()> {
 
     NODE_SIZE.set(4).expect("Failed to set size");
     let mut new_node = Node::new();
-    let mut c = 0;
-/*    for i in 0..50 {
-        let sec = rand::thread_rng().gen_range(1, 1000);
-        Node::insert(&mut new_node, sec, String::from("Woof"));
-        c = c + 1;
-        println!("{} - {}", c, sec);
-    }*/
+    let random_keys = vec![113, 193, 291, 456, 392, 409, 239, 550, 919, 658, 237, 542, 991, 296, 604, 285, 78, 881, 118, 39, 905, 258, 755, 340, 429, 210, 533, 417, 22, 141, 628, 958, 348, 811, 434, 973, 50, 486, 756, 717, 31, 499, 213, 83, 31, 519, 531, 129, 712, 495, 286, 637, 94, 369, 589, 483, 143, 339, 254, 600, 750, 995, 542, 784, 139, 653, 504, 825, 785, 585, 736, 185, 226, 260, 387, 644, 174, 827, 83, 511, 616, 436, 591, 232, 52, 261, 258, 9, 187, 430, 283, 621, 580, 704, 533, 286, 363, 319, 432, 70];
+    // let keys: Vec<u32> = (0..100).map(|_| rand::thread_rng().gen_range(0, 10_00)).collect();
+    let keys2 = random_keys.clone();
+    // println!("{:?}", keys);
+
+    let t1 = {
+        let mut new_node = Arc::clone(&new_node);
+        thread::spawn(move || {
+            let apple = new_node.lock().unwrap();
+            let mut c = 0;
+            for i in random_keys {
+                let k = Arc::clone(&new_node);
+                Node::insert(apple, i, String::from("Woof"));
+                c = c + 1;
+                println!("ZZZ {}-{} {:?}", c,i, new_node.lock().unwrap_or_else(|e| e.into_inner()).print_tree());
+            }
+        })
+    };
+
+    let t2 = {
+        let mut new_node = Arc::clone(&new_node);
+        thread::spawn(move || {
+            let apple = new_node.lock().unwrap();
+            let mut c = 0;
+            for i in keys2 {
+                let k = Arc::clone(&new_node);
+                Node::insert(apple, i, String::from("Woof"));
+                c = c + 1;
+                println!("XXX {}-{} {:?}", c,i, new_node.lock().unwrap_or_else(|e| e.into_inner()).print_tree());
+            }
+        })
+    };
+
+    println!("Thread 1: ");
+    t1.join().unwrap();
+    println!("Thread 2: ");
+    t2.join().unwrap();
+
+    /*    let mut c = 0;
+        for i in 0..50 {
+            let sec = rand::thread_rng().gen_range(1, 1000);
+            Node::insert(&mut new_node, sec, String::from("Woof"));
+            c = c + 1;
+            println!("{} - {}", c, sec);
+        }*/
 
 
 /*    let mut file = OpenOptions::new()
@@ -1262,11 +1304,11 @@ fn main() -> io::Result<()> {
     Node::wal(&file, &mut new_node,12, String::from("Woof"));
     Node::wal(&file, &mut new_node,13, String::from("Woof"));
     Node::wal(&file, &mut new_node,14, String::from("Woof"));
-    Node::wal(&file, &mut new_node,15, String::from("Woof"));
+    Node::wal(&file, &mut new_node,15, String::from("Woof"));*/
 
 
     println!("{:?}", new_node.lock().unwrap().print_tree());
-*/
+
 
 /*    println!("Key to be discovered?");
     let required_key = read_num();
@@ -1297,7 +1339,7 @@ fn main() -> io::Result<()> {
 */
 
 
-    Node::crash_recovery()?;
+    // Node::crash_recovery()?;
 
     Ok(())    
 }
