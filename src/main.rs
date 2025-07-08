@@ -72,15 +72,26 @@ impl Node {
     
     // Insert the K-V into the empty node.
     // Todo: Understand why i had to call every function 3 times for correct functioning.
-    fn insert(self_node: MutexGuard<Node>, k: u32, v: String) -> io::Result<()> {
-        let mut z = self_node;
-        let rank = z.rank;
-        if !z.children.is_empty() {
-            z.add_child_key(Items {key: k, value: v.clone(), rank});
+    fn insert(self_node: Arc<Mutex<Node>>, k: u32, v: String) -> io::Result<()> {
+        let cloned_node = Arc::clone(&self_node);
+        let mut z = self_node.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if !z.input.is_empty() {
+            match Node::temporary_duplicate_key_check(&z, k) {
+                Some(result) => {
+                    println!("MEOW");
+                    return Ok(());
+                }
+
+                None => {
+
+                }
+            }
         }
-        else {
-            z.input.push(Items {key: k, value: v, rank});
-        }
+
+
+        Node::add_new_keys(&mut z, Items {key: k, value: v.clone(), rank: 1 } );
+
         z = Node::overflow_check(z);
         z = Node::min_size_check(z);
         z.sort_main_nodes();
@@ -88,7 +99,7 @@ impl Node {
         z = Node::tree_integrity_check(z);
 
         z = Node::min_size_check(z);
-        
+
         z = Node::overflow_check(z);
 
 
@@ -105,6 +116,37 @@ impl Node {
 
         Ok(())
     }
+
+    /// # THIS IS A TEMPORARY HACK SOLUTION. IT'LL STAY THERE TILL I ADD AN ACTUAL THREAD SAFE WAL.
+    /// ## DO NOT TAKE THIS SERIOUSLY.
+    /// ### :(
+    fn temporary_duplicate_key_check(node: &MutexGuard<Node>, key: u32) -> Option<Items> {
+        for i in 0..node.input.len() {
+            if node.input[i].key == key {
+                return Some(node.input[i].clone());
+            }
+        }
+
+        if !node.children.is_empty() {
+            if key < node.input[0].key {
+                let guard = node.children[0].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                return Node::temporary_duplicate_key_check(&guard, key);
+            } else if key > node.input[node.input.len()-1].key {
+                let guard = node.children.last().unwrap().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                return Node::temporary_duplicate_key_check(&guard, key);
+            } else {
+                for i in 0..node.input.len() - 1 {
+                    if key > node.input[i].key && key < node.input[i+1].key {
+                        let guard = node.children[i+1].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        return Node::temporary_duplicate_key_check(&guard, key);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+    
     
     /// A maintenance function responsible for checking overflows on designated nodes.
     /// The function recursively check children of the current Node only if the children exists and the node itself isn't overflowing.
@@ -145,7 +187,6 @@ impl Node {
         root
 
     }
-
     
     /// A private function exclusively invoked from `fn overflow_check` only if the selected node is overflowing i.e. The number of keys on the selected node
     /// exceeds maximum pre-defined threshold.
@@ -435,34 +476,44 @@ impl Node {
 
         self_instance
     }
-    fn add_child_key(&mut self, mut x: Items) -> () {
-        if x.key < self.input[0].key {
-            if !self.children.is_empty() {
-                self.children[0].lock().unwrap().add_child_key(x);
-            } else {
-                x.rank = self.input[0].rank;
-                self.input.push(x);
-            }
-        } else if x.key > self.input[self.input.len()-1].key {
-            if !self.children.is_empty() {
-                self.children[self.children.iter().count() - 1].lock().unwrap().add_child_key(x);
-            } else {
-                x.rank = self.input[0].rank;
-                self.input.push(x);
-            }
+    fn add_new_keys(self_node : &mut MutexGuard<Node>, mut x: Items){
+        let mut self_instance: &mut MutexGuard<Node> = self_node;
+        if self_instance.children.is_empty() {
+            self_instance.input.push(x.clone());
         } else {
-            for i in 0..self.input.len() - 1 {
-                if x.key > self.input[i].key && x.key < self.input[i+1].key {
-                    if !self.children.is_empty() {
-                        self.children[i+1].lock().unwrap().add_child_key(x.clone());
-                    } else {
-                        x.rank = self.input[0].rank;
-                        self.input.push(x.clone());
+            if x.key < self_instance.input[0].key {
+                if !self_instance.children.is_empty() {
+                    let guard = &mut self_instance.children[0].lock().unwrap();
+                    Node::add_new_keys(guard, x);
+                } else {
+                    x.rank = self_instance.input[0].rank;
+                    self_instance.input.push(x);
+                }
+            } else if x.key > self_instance.input[self_instance.input.len()-1].key {
+                if !self_instance.children.is_empty() {
+                    let guard = &mut self_instance.children[self_instance.children.len()-1].lock().unwrap();
+                    Node::add_new_keys(guard, x);
+                } else {
+                    x.rank = self_instance.input[0].rank;
+                    self_instance.input.push(x);
+                }
+            } else {
+                for i in 0..self_instance.input.len() - 1 {
+                    if x.key > self_instance.input[i].key && x.key < self_instance.input[i+1].key {
+                        if !self_instance.children.is_empty() {
+                            let guard = &mut self_instance.children[i+1].lock().unwrap();
+                            Node::add_new_keys(guard, x.clone());
+                        } else {
+                            x.rank = self_instance.input[0].rank;
+                            self_instance.input.push(x.clone());
+                        }
                     }
                 }
             }
         }
-        self.sort_main_nodes();
+
+
+        self_instance.sort_main_nodes();
     }
 
     /// Checks for nodes violating the B-tree invariant `input.len() >= NODE_SIZE/2`
@@ -514,7 +565,6 @@ impl Node {
         
         x
     }
-
 
     /// Private function invoked from [`Node::min_size_check`], ensures all node meet the B-Tree invariant of `input.len() >= NODE_SIZE`.
     ///
@@ -1159,8 +1209,7 @@ impl Node {
 
         file.sync_all()?;
         let clone_node = Arc::clone(&self_node);
-        let guard = self_node.lock().unwrap();
-        let result = Node::insert(guard, k, v);
+        let result = Node::insert(self_node, k, v);
         match result {
             Ok(()) => {
                 let serialization_result = Node::serialize(clone_node);
@@ -1221,8 +1270,8 @@ impl Node {
             let result =  Node::key_position(z, k);
             
             if result.is_none() {
-                let guard = arc_node.lock().unwrap();
-                Node::insert(guard, i[0].parse().unwrap(), i[1].clone()).expect("TODO: panic message");
+                let s = Arc::clone(&arc_node);
+                Node::insert(s, i[0].parse().unwrap(), i[1].clone()).expect("TODO: panic message");
             }
         }
         let zas = arc_node.lock().unwrap();
@@ -1236,19 +1285,31 @@ fn main() -> io::Result<()> {
 
     NODE_SIZE.set(4).expect("Failed to set size");
     let mut new_node = Node::new();
-    let random_keys = vec![113, 193, 291, 456, 392, 409, 239, 550, 919, 658, 237, 542, 991, 296, 604, 285, 78, 881, 118, 39, 905, 258, 755, 340, 429, 210, 533, 417, 22, 141, 628, 958, 348, 811, 434, 973, 50, 486, 756, 717, 31, 499, 213, 83, 31, 519, 531, 129, 712, 495, 286, 637, 94, 369, 589, 483, 143, 339, 254, 600, 750, 995, 542, 784, 139, 653, 504, 825, 785, 585, 736, 185, 226, 260, 387, 644, 174, 827, 83, 511, 616, 436, 591, 232, 52, 261, 258, 9, 187, 430, 283, 621, 580, 704, 533, 286, 363, 319, 432, 70];
+    let random_keys = vec![
+        42, 763, 198, 571, 925, 314, 689, 147, 832, 456, 259, 673, 918, 34, 507, 742, 189, 621, 954, 276,395, 718, 153, 864, 237, 589, 426, 971, 64, 802,
+        345, 678, 913, 52, 729, 184, 537, 860, 293, 641, 478, 815, 126, 369, 702, 945, 211, 584, 837, 162, 497, 730, 85, 412, 759, 204, 631, 978, 351, 694,
+        127, 480, 823, 268, 615, 952, 379, 706, 143, 890, 527, 174, 641, 908, 325, 658, 193, 546, 879, 232, 417, 750, 95, 362, 795, 248, 583, 916, 471, 804,
+        139, 576, 921, 354, 687, 122, 469, 812, 257, 690, 35, 428, 773, 160, 523, 886, 311, 644, 977, 402, 735, 108, 451, 798, 265, 618, 953, 386, 719, 154,
+        171, 504, 857, 292, 625, 988, 453, 786, 119, 552, 895, 330, 663, 996, 429, 762, 195, 548, 911, 374, 737, 100, 463, 816, 251, 604, 947, 380, 713, 166,
+        539, 872, 215, 568, 901, 334, 667, 20, 495, 828, 273, 616, 959, 392, 725, 158, 521, 854, 289, 632, 975, 408, 741, 164, 517, 880, 323, 656, 991, 444,
+        777, 110, 473, 836, 201, 564, 927, 350, 683, 136, 509, 842, 277, 620, 963, 398, 731, 154, 597, 940];
     // let keys: Vec<u32> = (0..100).map(|_| rand::thread_rng().gen_range(0, 10_00)).collect();
     let keys2 = random_keys.clone();
-    // println!("{:?}", keys);
+/*    let mut c = 0;
+    for i in random_keys {
+        let k = Arc::clone(&new_node);
+        Node::insert(k, i, String::from("Woof"));
+        c = c + 1;
+        println!("ZZZ {}-{} {:?}", c,i, new_node.lock().unwrap_or_else(|e| e.into_inner()).print_tree());
+    }*/
 
     let t1 = {
-        let mut new_node = Arc::clone(&new_node);
+        let new_node = Arc::clone(&new_node);
         thread::spawn(move || {
-            let apple = new_node.lock().unwrap();
             let mut c = 0;
             for i in random_keys {
                 let k = Arc::clone(&new_node);
-                Node::insert(apple, i, String::from("Woof"));
+                Node::insert(k, i, String::from("Woof"));
                 c = c + 1;
                 println!("ZZZ {}-{} {:?}", c,i, new_node.lock().unwrap_or_else(|e| e.into_inner()).print_tree());
             }
@@ -1256,28 +1317,26 @@ fn main() -> io::Result<()> {
     };
 
     let t2 = {
-        let mut new_node = Arc::clone(&new_node);
+        let new_node = Arc::clone(&new_node);
         thread::spawn(move || {
-            let apple = new_node.lock().unwrap();
             let mut c = 0;
             for i in keys2 {
                 let k = Arc::clone(&new_node);
-                Node::insert(apple, i, String::from("Woof"));
+                Node::insert(k, i, String::from("Woof"));
                 c = c + 1;
                 println!("XXX {}-{} {:?}", c,i, new_node.lock().unwrap_or_else(|e| e.into_inner()).print_tree());
             }
         })
     };
 
-    println!("Thread 1: ");
     t1.join().unwrap();
-    println!("Thread 2: ");
     t2.join().unwrap();
 
-    /*    let mut c = 0;
+/*        let mut c = 0;
         for i in 0..50 {
             let sec = rand::thread_rng().gen_range(1, 1000);
-            Node::insert(&mut new_node, sec, String::from("Woof"));
+            let k = Arc::clone(&new_node);
+            Node::insert(k, sec, String::from("Woof"));
             c = c + 1;
             println!("{} - {}", c, sec);
         }*/
