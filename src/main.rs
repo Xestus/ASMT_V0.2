@@ -3,8 +3,8 @@ use crate::rand::Rng;
 use std::io::{BufRead, BufReader, Write};
 extern crate rand;
 
-use std::{io, thread};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::{fs, io};
+use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::rc::Rc;
@@ -13,9 +13,12 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::mem::zeroed;
 use std::path::Path;
+use std::thread;
+use std::time::Duration;
 
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
+static COUNTER: AtomicUsize = AtomicUsize::new(100);
 
 #[derive(Debug, Clone, PartialEq, Ord, PartialOrd, Eq, Hash)]
 struct Items {
@@ -937,17 +940,15 @@ impl Node {
             .create(true)
             .truncate(true)
             .open("example.txt")?;
-        
+
         writeln!(file, "[0]").expect("TODO: panic message");
         Node::serialization(node, &mut file);
         Ok(())
     }
-    
+
     fn serialization(node: Arc<Mutex<Node>>, file: &mut File) {
         let node_instance = node.lock().unwrap();
-
         let l = node_instance.input.len();
-
         writeln!(file, "[{:X}]", node_instance.rank).expect("Error writing to file.");
         writeln!(file, "[{:X}]", l).expect("panic message");
         for i in 0..l {
@@ -959,20 +960,24 @@ impl Node {
             writeln!(file,"").expect("panic message");
         }
         writeln!(file,"[{:X}]", node_instance.children.len()).expect("panic message");
-
         if !node_instance.children.is_empty() {
-            for i in 0..node_instance.input.len() {
-                let k = Arc::clone(&node_instance.children[i]);
-                Node::serialization(k, file);
+            for i in 0..node_instance.input.len() + 1 {
+                let z = Arc::clone(&node_instance.children[i]);
+                Node::serialization(z, file);
             }
-            let j = Arc::clone(&node_instance.children[node_instance.input.len()-1]);
-            Node::serialization(j, file);
         }
     }
 
-    fn deserialize() -> io::Result<(Node)> {
+    fn deserialize() -> io::Result<(Arc<Mutex<Node>>)> {
         let file = File::open("example.txt")?;
+        let metadata = fs::metadata("example.txt")?;
+        if metadata.len() == 0 {
+            return Ok(Node::new());
+        }
+        println!("{:?}", metadata);
+
         let read = BufReader::new(file);
+        
 
         let single_bracket = Regex::new(r"^\[[^\]]+\]$").unwrap();
         let double_bracket = Regex::new(r"^\[[^\]]+\]\[[^\]]+\]$").unwrap();
@@ -1109,6 +1114,7 @@ impl Node {
         println!("{:?}", k.print_tree());
         println!("###############################################");
 
+        let k = Arc::new(Mutex::new(k));
 
         Ok(k)
     }
@@ -1261,76 +1267,130 @@ impl Node {
         }
 
         let node =  Node::deserialize().unwrap();
-
-        let mut arc_node = Arc::new(Mutex::new(node));
+        println!("A");
         for i in meow.iter() {
             // let cloned_node = Arc::clone(&arc_node);
             let k = i[0].parse::<u32>().unwrap();
-            let z = Arc::clone(&arc_node);
+            let z = Arc::clone(&node);
             let result =  Node::key_position(z, k);
             
             if result.is_none() {
-                let s = Arc::clone(&arc_node);
+                let s = Arc::clone(&node);
                 Node::insert(s, i[0].parse().unwrap(), i[1].clone()).expect("TODO: panic message");
             }
         }
-        let zas = arc_node.lock().unwrap();
+        println!("{:?}",node.lock().unwrap().print_tree() );
+        Ok(())
+    }
+
+    fn wal_updated(mut file: Arc<Mutex<File>>,k: u32, v: String, thread_name: String) -> io::Result<()> {
+        let mut file_instance = file.lock().unwrap();
+        let lsn = COUNTER.load(Ordering::SeqCst);
+
+        writeln!(file_instance, "{:?} {:?} {:?} {:?}", lsn, k, v, thread_name).expect("TODO: panic message");
+        file_instance.sync_all()?;
+
+        COUNTER.fetch_add(1, Ordering::SeqCst);
+
+        Ok(())
+    }
+
+    fn wal_read(mut file: Arc<Mutex<File>>) -> io::Result<String> {
+        let mut file = file.lock().unwrap();
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+        println!("{}", contents);
+
+        Ok(contents)
+    }
+
+    fn receiver_decode(contents: String) -> io::Result<()> {
+        let mut lines = Vec::new();
+        for line in contents.lines() {
+            let mut k = Vec::new();
+            for mut c in line.split_whitespace() {
+                c = c.trim_matches('"');
+                k.push(c.to_string());
+            }
+            lines.push(k);
+        }
         
-        println!("{:?}",zas.print_tree() );
         Ok(())
     }
 }
 
 fn main() -> io::Result<()> {
-
     NODE_SIZE.set(4).expect("Failed to set size");
+
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open("WAL.txt")?;
+
+    let file_read = OpenOptions::new()
+        .read(true)
+        .open("WAL.txt")?;
+
+    let file = Arc::new(Mutex::new(file));
+    let file_read = Arc::new(Mutex::new(file_read));
     let mut new_node = Node::new();
-    let random_keys = vec![
-        42, 763, 198, 571, 925, 314, 689, 147, 832, 456, 259, 673, 918, 34, 507, 742, 189, 621, 954, 276,395, 718, 153, 864, 237, 589, 426, 971, 64, 802,
-        345, 678, 913, 52, 729, 184, 537, 860, 293, 641, 478, 815, 126, 369, 702, 945, 211, 584, 837, 162, 497, 730, 85, 412, 759, 204, 631, 978, 351, 694,
-        127, 480, 823, 268, 615, 952, 379, 706, 143, 890, 527, 174, 641, 908, 325, 658, 193, 546, 879, 232, 417, 750, 95, 362, 795, 248, 583, 916, 471, 804,
-        139, 576, 921, 354, 687, 122, 469, 812, 257, 690, 35, 428, 773, 160, 523, 886, 311, 644, 977, 402, 735, 108, 451, 798, 265, 618, 953, 386, 719, 154,
-        171, 504, 857, 292, 625, 988, 453, 786, 119, 552, 895, 330, 663, 996, 429, 762, 195, 548, 911, 374, 737, 100, 463, 816, 251, 604, 947, 380, 713, 166,
-        539, 872, 215, 568, 901, 334, 667, 20, 495, 828, 273, 616, 959, 392, 725, 158, 521, 854, 289, 632, 975, 408, 741, 164, 517, 880, 323, 656, 991, 444,
-        777, 110, 473, 836, 201, 564, 927, 350, 683, 136, 509, 842, 277, 620, 963, 398, 731, 154, 597, 940];
-    // let keys: Vec<u32> = (0..100).map(|_| rand::thread_rng().gen_range(0, 10_00)).collect();
+    // let random_keys = vec![1,2,3,4,5,6,7,8,9,10,11,12,13,14,15];
+    let random_keys: Vec<u32> = (0..100).map(|_| rand::thread_rng().gen_range(0, 10_00)).collect();
     let keys2 = random_keys.clone();
-/*    let mut c = 0;
-    for i in random_keys {
+/*    for i in random_keys {
         let k = Arc::clone(&new_node);
-        Node::insert(k, i, String::from("Woof"));
+        Node::wal_updated(&file, i, String::from("Woof"), lsn_count);
+        lsn_count += 1;
         c = c + 1;
         println!("ZZZ {}-{} {:?}", c,i, new_node.lock().unwrap_or_else(|e| e.into_inner()).print_tree());
     }*/
-
     let t1 = {
-        let new_node = Arc::clone(&new_node);
+        let file = Arc::clone(&file);
         thread::spawn(move || {
             let mut c = 0;
             for i in random_keys {
-                let k = Arc::clone(&new_node);
-                Node::insert(k, i, String::from("Woof"));
+                let k = Arc::clone(&file);
+                Node::wal_updated(k, i, String::from("Woof"), String::from("A"));
                 c = c + 1;
-                println!("ZZZ {}-{} {:?}", c,i, new_node.lock().unwrap_or_else(|e| e.into_inner()).print_tree());
             }
         })
     };
 
     let t2 = {
-        let new_node = Arc::clone(&new_node);
         thread::spawn(move || {
             let mut c = 0;
             for i in keys2 {
-                let k = Arc::clone(&new_node);
-                Node::insert(k, i, String::from("Woof"));
+                let k = Arc::clone(&file);
+                Node::wal_updated(k, i, String::from("Woof"), String::from("B"));
                 c = c + 1;
-                println!("XXX {}-{} {:?}", c,i, new_node.lock().unwrap_or_else(|e| e.into_inner()).print_tree());
             }
+            // Node::serialize(new_node).expect("panic message");
+            // Node::deserialize().expect("panic message");
         })
     };
 
+    let mut kount = 0;
+    let t3 = thread::spawn(move || {
+        loop {
+            let k = Arc::clone(&file_read);
+            if kount == 10 {
+                break;
+            }
+            
+            Node::crash_recovery();
+
+            thread::sleep(Duration::from_micros(700));
+            
+            kount += 1;
+        }
+
+    });
+
+
     t1.join().unwrap();
     t2.join().unwrap();
+    t3.join().unwrap();
 
 /*        let mut c = 0;
         for i in 0..50 {
@@ -1365,9 +1425,11 @@ fn main() -> io::Result<()> {
     Node::wal(&file, &mut new_node,14, String::from("Woof"));
     Node::wal(&file, &mut new_node,15, String::from("Woof"));*/
 
-
+    let sad = Arc::clone(&new_node);
     println!("{:?}", new_node.lock().unwrap().print_tree());
-
+/*    Node::serialize(sad).expect("panic message");
+    Node::deserialize().expect("panic message");
+*/
 
 /*    println!("Key to be discovered?");
     let required_key = read_num();
