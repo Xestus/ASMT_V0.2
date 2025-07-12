@@ -51,7 +51,7 @@ struct UltraDeserialized {
 }
 
 impl Node {
-    
+
     /// The function creates a new empty node for a B-tree during initialization and operations such as splitting.
     /// The default value of field `rank` is 1 as:
     /// - A new B-Tree always starts with an empty Node with `rank: 1`.
@@ -72,7 +72,7 @@ impl Node {
         }));
         instance
     }
-    
+
     // Insert the K-V into the empty node.
     // Todo: Understand why i had to call every function 3 times for correct functioning.
     fn insert(self_node: Arc<Mutex<Node>>, k: u32, v: String) -> io::Result<()> {
@@ -149,20 +149,20 @@ impl Node {
 
         None
     }
-    
-    
+
+
     /// A maintenance function responsible for checking overflows on designated nodes.
     /// The function recursively check children of the current Node only if the children exists and the node itself isn't overflowing.
     /// If the current node has its key count greater than maximum designated value, a function "split_node" is invoked which splits overflowing node by relocating
     /// keys smaller and larger than middle keys as its children, while middle key stays at the same level.
-    /// 
+    ///
     /// The function is expected to be called right and only after insertion.
-    /// 
+    ///
     /// Panics if: 
     /// - static `NODE_SIZE` is uninitialized. 
     /// - The children mutex is poisoned when used as recursive functional parameter. 
     /// But both the `.unwrap()` are safe, I think.
-    /// 
+    ///
     /// - MutexGuard<Node> was used as both return and parameter because it allows reuse during recursion without relocking.
     fn overflow_check(mut root: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut stack = Vec::new();
@@ -190,18 +190,18 @@ impl Node {
         root
 
     }
-    
+
     /// A private function exclusively invoked from `fn overflow_check` only if the selected node is overflowing i.e. The number of keys on the selected node
     /// exceeds maximum pre-defined threshold.
-    /// 
+    ///
     /// The selected node is split by pushing the smaller and larger keys than the middle key as its children, while the middle key stays at the same level.
     /// There will be no change to pre-existing children nodes. The newly added child nodes will be placed on the last 2 indices on the field `children`.
-    /// 
+    ///
     /// The splitting would create a temporary state of under-flowing node but quickly resolved by the recursive function `tree_integrity_check`
     /// that checks whether the node has number of keys lesser than minimum pre-defined threshold.
     /// The parent will node will have exactly 1 key and 2 new children.
-    /// 
-    /// 
+    ///
+    ///
     /// The nodes containing the smaller and larger keys will always have their rank as one more than their parent (Node with middle key).
     /// The field `rank` is modified twice, inside and after the loop because two struct containing field `rank`, 
     /// Rank field of:
@@ -213,7 +213,7 @@ impl Node {
     /// - Even: The middle key splits the node into 2 half, where `number of keys larger than middle key - 1 = number of keys smaller than middle key`
     ///
     /// As the minimum possible designated maximum number of keys per node is 4, cases such as `.input.len()` being 0 or 1 is completely avoided.
-    /// 
+    ///
     /// TODO: Edge Cases such as: Mutex for `struct_one` and `struct_two` being poisoned.
     ///
     fn split_nodes(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
@@ -223,10 +223,10 @@ impl Node {
 
         let struct_one = Node::new(); // Holds keys smaller than middle key.
         let struct_two = Node::new(); // Holds keys larger than middle key.
-        
+
         let items_size = self_instance.input.len();
         let breaking_point = (items_size + 1)/2;
-        let temp_storage = self_instance.clone(); 
+        let temp_storage = self_instance.clone();
         let mut i = 0;
         self_instance.input.clear();
         for count in 1..temp_storage.input.len() + 1 {
@@ -239,14 +239,14 @@ impl Node {
                 i = i + 1; // Variable "i" was used instead of count because `i` denotes the number of keys in struct_two.
                 struct_two.lock().unwrap().input.push(temp_storage.input[count - 1].clone()); // Push the `Items` with keys larger than middle key onto struct_two.
                 struct_two.lock().unwrap().input[i - 1].rank = temp_storage.rank + 1; // Set their key rank as parent node's rank + 1.
-            } 
+            }
         }
 
         // Set struct_one/two's node rank as parent's node rank + 1.
         struct_one.lock().unwrap().rank = self_instance.rank + 1;
         struct_two.lock().unwrap().rank = self_instance.rank + 1;
-        
-        
+
+
         self_instance.children.push(struct_one);
         self_instance.children.push(struct_two);
 
@@ -304,34 +304,34 @@ impl Node {
         }
         self_node
     }
-    
+
     /// A private function exclusively invoked from `fn tree_integrity_check`.
-    /// 
+    ///
     /// Its invoked if the temporary B-Tree structure violates the fundamental B-Tree property:
     /// - For non-leaf nodes, `children.len() == input.len() + 1`.
     ///
     /// That occurs due to the internal node's key count exceeding the maximum designated size,
     ///  it causes the node to split, forcing its non-middle key to be added as two children.
-    /// 
+    ///
     /// The first double for loop iteration is used to compare the first and the last keys of every node with the other to discover and place overlapping node
     /// (Node whose first key subceeds and last key exceeds at least one other node's first key and last key respectively) on the last 2 indices where the 
     /// overlapping nodes are to be used as parent nodes for the rest of the children. 
-    /// 
+    ///
     /// It's a temporary brute-force solution with some unnecessary cloning.
     /// `Naïve O(N²)` algorithm *is* inefficient in comparison to `O(N Log N)` but is used as a placeholder to be replaced with (maybe) Sweep Line Algorithm. 
-    /// 
+    ///
     /// Its tolerable now as the maximum number of keys per node is relatively small.
-    /// 
+    ///
     /// The last 2 overlapping nodes are sorted by first key on ascending order by preloading the keys to `key_nodes`, sorting them and placing them back 
     /// to original child node which prevents deadlocking during sorting.
-    /// 
+    ///
     /// Only the last 2 children are sorted because the last two children are assumed to be the new parent for rest of the children.
-    /// 
+    ///
     /// Other children are assumed to be sorted and satisfy the B-Tree ordering policy.
     ///
     /// `unwrap_or_else()` is a temporary duct taped-error handling to be replaced with a `safe_lock<T>` wrapper and/or integrity check with match whenever deemed necessary.
     ///
-    /// 
+    ///
     /// .
     ///
     /// Before (invalid):  
@@ -360,7 +360,7 @@ impl Node {
     fn fix_child_count_mismatch(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut self_instance = self_node;
         let child_len = self_instance.children.len();
-        
+
         for i in 0..child_len {
             // The children cannot be empty as only the nodes with children not empty can invoke the function (!self_instance.children.is_empty())
             let some_val = self_instance.children[i].lock().unwrap().clone();
@@ -403,7 +403,7 @@ impl Node {
 
         let mut parent_one_child_boundary = Vec::new();
         let mut parent_two_child_boundary = Vec::new();
-        
+
         // Snippet placed inside a code block because `guard_parent_one` and `guard_parent_two` takes an immutable reference. 
         {
             let guard_parent_one = self_instance.children[self_instance.children.len() - 2].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -412,7 +412,7 @@ impl Node {
             let new_parent_one_length = guard_parent_one.input.len();
             let new_parent_two_length = guard_parent_two.input.len();
 
-            
+
             let guards = [&guard_parent_one, &guard_parent_two];
 
             // Assigns the minimum and maximum limit that the keys must fall to be placed as child for either of two new parents to parent_X_child_boundary.
@@ -423,7 +423,7 @@ impl Node {
                 // `i` being 1 and 2 assigns `guard_parent_one` and `guard_parent_two` to `k` respectively.
                 let guard = guards[i];
                 let require_child = vec![guard.input[0].key, guard.input[k - 1].key];
-                
+
                 if require_child[1] < self_instance.input.first().unwrap().key {
                     placeholder = vec![0, self_instance.input.first().unwrap().key]
                 } else if require_child[0] > self_instance.input.last().unwrap().key {
@@ -520,11 +520,11 @@ impl Node {
     }
 
     /// Checks for nodes violating the B-tree invariant `input.len() >= NODE_SIZE/2`
-    /// 
+    ///
     /// # How does it happen?
     /// -  [`Node::split_nodes`] splits the overflowing (`input.len() > NODE_SIZE`) node that demotes non-middle key as children of middle key.
     /// - The number of middle key is always singular i.e. the node will only have 1 key which violates the B-Tree invariant.
-    /// 
+    ///
     /// # Working:
     /// - The first iterator pushes indices of the current node's child that violates the B-Tree invariant of 
     ///  `child.input.len() < NODE_SIZE/2 && child.rank > 1` to a temporary storage vector.
@@ -532,7 +532,7 @@ impl Node {
     /// - The second iterator reverses the iterator's direction and pushes the parent node and the invariant violator child to [`Node::propagate_up`]
     ///   that propagates the child & its own children to its parent. 
     /// - The third iterator re-invokes the current function **if** any child of the current node has children. 
-    /// 
+    ///
     /// # Conditions:
     /// - `child_lock.input.len() < NODE_SIZE/2` still works if the maximum number of node count is either even or odd.
     ///     - The standard minimum key per node formula is:  `ceil((M + 1)/2) - 1` which gives the same result as `NODE_SIZE/2`.
@@ -545,7 +545,7 @@ impl Node {
     /// - Add poison propagation in case of locking errors.
     fn min_size_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
         let mut x = self_node;
-        
+
         let mut indices_to_propagate = Vec::new();
         for (idx, child) in x.children.iter().enumerate() {
             let child_lock = child.lock().unwrap_or_else(|e| e.into_inner());
@@ -565,7 +565,7 @@ impl Node {
                 let _unused = Node::min_size_check(child_lock);
             }
         }
-        
+
         x
     }
 
@@ -592,7 +592,7 @@ impl Node {
     ///     - Push to parent node's `children`.
     /// - Third iterator: Collect the indices of redundant `child` node from parent in `to_be_removed: Vec<usize>`
     /// - Fourth iterator: Remove the redundant `child` node from the parent using reverse of `to_be_removed: Vec<usize>` to prevent deadlocks.
-    /// 
+    ///
     /// # Conditions:
     /// - `x.children[i].lock().unwrap()` is safe because:
     ///     - Only a single lock is held in an instance of time as there is no recursion or nested iterators resulting in not locking the same mutex *again*.
@@ -605,9 +605,9 @@ impl Node {
     /// # Diagram:
     ///
     /// Before (invalid):
-    /// 
+    ///
     /// ```
-    /// 
+    ///
     ///                 [230]
     ///                /--╨-\
     ///               /      \
@@ -618,9 +618,9 @@ impl Node {
     ///                    /         \
     ///               [353, 513]  [670, 675]
     /// ```
-    /// 
+    ///
     /// After (valid):
-    /// 
+    ///
     /// ```
     ///                  [230, 661]
     ///                /-----╨-----\
@@ -662,7 +662,7 @@ impl Node {
 
         x
     }
-    
+
     fn sort_children_nodes(&mut self) {
         self.children.sort_by(|a, b| {a.lock().unwrap().input[0].key.cmp(&b.lock().unwrap().input[0].key)});
     }
@@ -701,7 +701,7 @@ impl Node {
     /// - [`std::sync::PoisonError`] is a plausible error, handled temporarily by [`Result::unwrap_or_else`] assuming no corruption has occurred.
     /// - [`Rc<RefCell<T>>`] isn't preferred because they're not for concurrent access across multiple threads. 
     /// - Root, Branch and Internal nodes, all of them will provide a valid result.
-    /// 
+    ///
     /// # Examples
     /// ```rust
     /// // Assume you have a B-tree with a key 1 on rank 2 with value "Woof".
@@ -712,11 +712,11 @@ impl Node {
     ///
     /// ```rust
     /// // Assume you have a B-Tree without the entered key.
-    /// 
+    ///
     /// let result = Node::key_position(new_node.clone(), required_key);
     /// assert_eq!(result, None);
     /// ```
-    /// 
+    ///
     /// # TODO + WARNING:
     /// - THE SYSTEM CURRENTLY ISN'T CONCURRENT BUT IS CONCURRENCY IS THE NEXT FEATURE TO BE ADDED AFTER WRITE AHEAD LOGIN. PLEASE FORGIVE ME.
     /// - CASES WITH READER/WRITER COLLISION WILL BE HANDLED WITH REPLACEMENT OF MUTEX WITH RWLOCK, DEPENDING UPON NEED. 
@@ -749,7 +749,7 @@ impl Node {
         }
         None
     }
-    
+
     fn remove_key(self_node: &mut Arc<Mutex<Node>>, key: u32) {
         Node::remove_key_extension(self_node, key);
         let mut x = self_node.lock().unwrap();
@@ -933,7 +933,7 @@ impl Node {
             Node::collect_keys_inorder(&node_instance.children[node_instance.input.len()], result);
         }
     }
-    
+
     fn serialize(node: Arc<Mutex<Node>>) -> io::Result<()>  {
         let mut file = OpenOptions::new()
             .write(true)
@@ -977,18 +977,18 @@ impl Node {
         println!("{:?}", metadata);
 
         let read = BufReader::new(file);
-        
+
 
         let single_bracket = Regex::new(r"^\[[^\]]+\]$").unwrap();
         let double_bracket = Regex::new(r"^\[[^\]]+\]\[[^\]]+\]$").unwrap();
         let array_pattern = Regex::new(r"^\[('[^']*'(,\s*'[^']*')*)\]$").unwrap();
 
         let mut vec: Vec<U32OrString> = Vec::new();
-        
+
         for contents in read.lines() {
             let x = contents?;
             let k = x.as_str();
-            
+
             if array_pattern.is_match(k) {
                 let result: String = k
                     .trim_matches(|c| c == '[' || c == ']')
@@ -1059,7 +1059,7 @@ impl Node {
                     }
                 }
             }
-            
+
             if internal_count == (no_of_keys * 3 + 1) as usize {
                 let mut probable_child_count = 0;
                 if let U32OrString::Num(value) = &vec[count -1] {
@@ -1071,7 +1071,7 @@ impl Node {
                 }
 
             }
-            
+
             if internal_count >= (no_of_keys * 3 + 3) as usize {
                 vec_items.clear();
                 no_of_keys_helper_counter = no_of_keys_helper_counter + (no_of_keys * 3 + 3) as usize;
@@ -1088,7 +1088,7 @@ impl Node {
                     }
                     first_time_hit_item_push = false;
                 }
-                
+
                 if let U32OrString::Num(value) = &vec[count - 3] {
                     k = *value;
 
@@ -1101,7 +1101,7 @@ impl Node {
                 vec_items.push(Items{key:k, value: l, rank: rank_for_keys });
                 push_count += 1;
             }
-            
+
         }
 
         let required_node = node_vec[0].clone();
@@ -1140,7 +1140,7 @@ impl Node {
                     z = Node::deserialized_with_relation(x.children[i].parent.clone(), node_vec);
                     x.children.push(z);
                 }
-           }
+            }
         }
         x
     }
@@ -1148,16 +1148,16 @@ impl Node {
     fn deserialized_duplicate_data_check(self_node: Node) -> Node {
         let mut self_instance = self_node;
         let mut dup_child_len = self_instance.children.len()/2;
-        
-/*        for i in 0..child_len {
-            let child_2_len = self_instance.children[i].lock().unwrap().children.len();
-            println!(" child_2_len: {} {:?}", child_2_len, self_instance.print_tree());
-            
-            let inp_len = self_instance.children[i].lock().unwrap().input.len();
-            if inp_len + 1 != child_2_len {
-                self_instance.children.remove(0);
-            }
-        }*/
+
+        /*        for i in 0..child_len {
+                    let child_2_len = self_instance.children[i].lock().unwrap().children.len();
+                    println!(" child_2_len: {} {:?}", child_2_len, self_instance.print_tree());
+                    
+                    let inp_len = self_instance.children[i].lock().unwrap().input.len();
+                    if inp_len + 1 != child_2_len {
+                        self_instance.children.remove(0);
+                    }
+                }*/
 
         let mut i = 0;
         while i < self_instance.children.len() {
@@ -1210,76 +1210,38 @@ impl Node {
         new_node
     }
 
-    fn wal(mut file: &File, self_node:Arc<Mutex<Node>>, k: u32, v: String) -> io::Result<()> {
-        write!(file, "{:?} {:?} ", k, v).expect("TODO: panic message");
 
-        file.sync_all()?;
-        let clone_node = Arc::clone(&self_node);
-        let result = Node::insert(self_node, k, v);
-        match result {
-            Ok(()) => {
-                let serialization_result = Node::serialize(clone_node);
-                match serialization_result {
-                    Ok(()) => {
-                        writeln!(file, "COMPLETED")?;
-                        file.sync_all()?;
-                    }
-                    Err(e) => {
-                        writeln!(file, "FAILED")?;
-                        file.sync_all()?;
-                        println!("Err: {}", e);
-                    }
-                }
-            }
-            Err(e) => {
-                writeln!(file, "FAILED")?;
-                file.sync_all()?;
-                println!("Err: {}", e);
-            }
-        }
+    fn crash_recovery(node: Arc<Mutex<Node>>) -> io::Result<()> {
+        let file_path = "WAL.txt";
+        let mut file = File::open(file_path)?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
 
-        Ok(())
-    }
-
-    fn crash_recovery() -> io::Result<()> {
-        let file = File::open("WAL.txt")?;
-        let read = BufReader::new(file);
+        let mut file = File::create(file_path)?;
+        file.write_all(b"")?;
 
         let mut meow = Vec::new();
-
-        for contents in read.lines() {
-            let mut contents_individual : Vec<String> = Vec::new();
-            match contents {
-                Ok(content) => {
-                    for line in content.split_whitespace() {
-                        contents_individual.push(line.to_string());
-                    }
-
-                }
-                Err(e) => {
-                    println!("FAILED: {}", e);
-                }
+        for line in contents.lines() {
+            let mut k = Vec::new();
+            for mut c in line.split_whitespace() {
+                c = c.trim_matches('"');
+                // c = c.trim_matches('\0');
+                k.push(c.to_string());
             }
-
-            if contents_individual.len() == 2 {
-                meow.push(vec![contents_individual[0].clone(), contents_individual[1].clone()]);
-            }
+            meow.push(k);
         }
 
-        let node =  Node::deserialize().unwrap();
-        println!("A");
         for i in meow.iter() {
-            // let cloned_node = Arc::clone(&arc_node);
-            let k = i[0].parse::<u32>().unwrap();
+            let k = i[1].parse::<u32>().unwrap();
             let z = Arc::clone(&node);
             let result =  Node::key_position(z, k);
-            
+
             if result.is_none() {
                 let s = Arc::clone(&node);
-                Node::insert(s, i[0].parse().unwrap(), i[1].clone()).expect("TODO: panic message");
+                Node::insert(s, i[1].parse().unwrap(), i[2].clone()).expect("TODO: panic message");
             }
         }
-        println!("{:?}",node.lock().unwrap().print_tree() );
+
         Ok(())
     }
 
@@ -1299,7 +1261,7 @@ impl Node {
         let mut file = file.lock().unwrap();
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
-        println!("{}", contents);
+        println!("ZZ {}", contents);
 
         Ok(contents)
     }
@@ -1314,7 +1276,7 @@ impl Node {
             }
             lines.push(k);
         }
-        
+
         Ok(())
     }
 }
@@ -1335,16 +1297,26 @@ fn main() -> io::Result<()> {
     let file = Arc::new(Mutex::new(file));
     let file_read = Arc::new(Mutex::new(file_read));
     let mut new_node = Node::new();
-    // let random_keys = vec![1,2,3,4,5,6,7,8,9,10,11,12,13,14,15];
-    let random_keys: Vec<u32> = (0..100).map(|_| rand::thread_rng().gen_range(0, 10_00)).collect();
+    let random_keys = vec![
+        42, 763, 198, 571, 925, 314, 689, 147, 832, 456, 259, 673, 918, 34, 507, 742, 189, 621, 954, 276,395, 718, 153, 864, 237, 589, 426, 971, 64, 802,
+        345, 678, 913, 52, 729, 184, 537, 860, 293, 998, 478, 815, 126, 369, 702, 945, 211, 584, 837, 162, 497, 730, 85, 412, 759, 204, 631, 978, 351, 694,
+        127, 480, 823, 268, 615, 952, 379, 706, 143, 890, 527, 174, 641, 908, 325, 658, 193, 546, 879, 232, 417, 750, 95, 362, 795, 248, 583, 916, 471, 804,
+        139, 576, 921, 354, 687, 122, 469, 812, 257, 690, 35, 428, 773, 160, 523, 886, 311, 644, 977, 402, 735, 108, 451, 798, 265, 618, 953, 386, 719, 154,
+        171, 504, 857, 292, 625, 988, 453, 786, 119, 552, 895, 330, 663, 996, 429, 762, 195, 548, 911, 374, 737, 100, 463, 816, 251, 604, 947, 380, 713, 166,
+        539, 872, 215, 568, 901, 334, 667, 20, 495, 828, 273, 616, 959, 392, 725, 158, 521, 854, 289, 632, 975, 408, 741, 164, 517, 880, 323, 656, 991, 444,
+        777, 110, 473, 836, 201, 564, 927, 350, 683, 136, 509, 842, 277, 620, 963, 398, 731, 999, 597, 940];
+
+    println!("{:?}", random_keys.len());
+
+    // let random_keys: Vec<u32> = (0..100).map(|_| rand::thread_rng().gen_range(0, 1_00_000)).collect();
     let keys2 = random_keys.clone();
-/*    for i in random_keys {
-        let k = Arc::clone(&new_node);
-        Node::wal_updated(&file, i, String::from("Woof"), lsn_count);
-        lsn_count += 1;
-        c = c + 1;
-        println!("ZZZ {}-{} {:?}", c,i, new_node.lock().unwrap_or_else(|e| e.into_inner()).print_tree());
-    }*/
+    /*    for i in random_keys {
+            let k = Arc::clone(&new_node);
+            Node::wal_updated(&file, i, String::from("Woof"), lsn_count);
+            lsn_count += 1;
+            c = c + 1;
+            println!("ZZZ {}-{} {:?}", c,i, new_node.lock().unwrap_or_else(|e| e.into_inner()).print_tree());
+        }*/
     let t1 = {
         let file = Arc::clone(&file);
         thread::spawn(move || {
@@ -1371,17 +1343,19 @@ fn main() -> io::Result<()> {
     };
 
     let mut kount = 0;
+    let node_clone = Arc::clone(&new_node);
     let t3 = thread::spawn(move || {
         loop {
             let k = Arc::clone(&file_read);
+            let arc_clone = Arc::clone(&node_clone);
             if kount == 10 {
                 break;
             }
-            
-            Node::crash_recovery();
 
-            thread::sleep(Duration::from_micros(700));
-            
+            // Node::wal_read(k).unwrap();
+            Node::crash_recovery(arc_clone);
+            thread::sleep(Duration::from_millis(50));
+
             kount += 1;
         }
 
@@ -1392,77 +1366,77 @@ fn main() -> io::Result<()> {
     t2.join().unwrap();
     t3.join().unwrap();
 
-/*        let mut c = 0;
-        for i in 0..50 {
-            let sec = rand::thread_rng().gen_range(1, 1000);
-            let k = Arc::clone(&new_node);
-            Node::insert(k, sec, String::from("Woof"));
-            c = c + 1;
-            println!("{} - {}", c, sec);
-        }*/
+    /*        let mut c = 0;
+            for i in 0..50 {
+                let sec = rand::thread_rng().gen_range(1, 1000);
+                let k = Arc::clone(&new_node);
+                Node::insert(k, sec, String::from("Woof"));
+                c = c + 1;
+                println!("{} - {}", c, sec);
+            }*/
 
 
-/*    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open("WAL.txt")?;
-
-
-    Node::wal(&file, &mut new_node, 1, String::from("Woof"));
-    Node::wal(&file, &mut new_node,2, String::from("Woof"));
-    Node::wal(&file, &mut new_node,3, String::from("Woof"));
-    Node::wal(&file, &mut new_node,4, String::from("Woof"));
-    Node::wal(&file, &mut new_node,5, String::from("Woof"));
-    Node::wal(&file, &mut new_node,6, String::from("Woof"));
-    Node::wal(&file, &mut new_node,7, String::from("Woof"));
-    Node::wal(&file, &mut new_node,8, String::from("Woof"));
-    Node::wal(&file, &mut new_node,9, String::from("Woof"));
-    Node::wal(&file, &mut new_node,10, String::from("Woof"));
-    Node::wal(&file, &mut new_node,11, String::from("Woof"));
-    Node::wal(&file, &mut new_node,12, String::from("Woof"));
-    Node::wal(&file, &mut new_node,13, String::from("Woof"));
-    Node::wal(&file, &mut new_node,14, String::from("Woof"));
-    Node::wal(&file, &mut new_node,15, String::from("Woof"));*/
+    /*    let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open("WAL.txt")?;
+    
+    
+        Node::wal(&file, &mut new_node, 1, String::from("Woof"));
+        Node::wal(&file, &mut new_node,2, String::from("Woof"));
+        Node::wal(&file, &mut new_node,3, String::from("Woof"));
+        Node::wal(&file, &mut new_node,4, String::from("Woof"));
+        Node::wal(&file, &mut new_node,5, String::from("Woof"));
+        Node::wal(&file, &mut new_node,6, String::from("Woof"));
+        Node::wal(&file, &mut new_node,7, String::from("Woof"));
+        Node::wal(&file, &mut new_node,8, String::from("Woof"));
+        Node::wal(&file, &mut new_node,9, String::from("Woof"));
+        Node::wal(&file, &mut new_node,10, String::from("Woof"));
+        Node::wal(&file, &mut new_node,11, String::from("Woof"));
+        Node::wal(&file, &mut new_node,12, String::from("Woof"));
+        Node::wal(&file, &mut new_node,13, String::from("Woof"));
+        Node::wal(&file, &mut new_node,14, String::from("Woof"));
+        Node::wal(&file, &mut new_node,15, String::from("Woof"));*/
 
     let sad = Arc::clone(&new_node);
     println!("{:?}", new_node.lock().unwrap().print_tree());
-/*    Node::serialize(sad).expect("panic message");
-    Node::deserialize().expect("panic message");
-*/
+    /*    Node::serialize(sad).expect("panic message");
+        Node::deserialize().expect("panic message");
+    */
 
-/*    println!("Key to be discovered?");
-    let required_key = read_num();
-
-
-        match Node::key_position(new_node.clone(), required_key) {
-            Some(x) => {
-                println!("Key found");
-                println!("{:?}", x);
-            }
-            None => println!("Key not found"),
-        }*/
-
-/*    for i in 0..100 {
-        println!("Keys to be deleted?");
+    /*    println!("Key to be discovered?");
         let required_key = read_num();
-        Node::remove_key(&mut new_node, required_key);
-        println!("{:?}", new_node.lock().unwrap().print_tree());
-    }
     
-    let k = Node::all_keys_ordered(&mut new_node);
-    for i in 0..k.len() {
-        println!("{} - {}", k[i].key, k[i].value);
-    }
     
-    Node::serialize(&new_node).expect("panic message");
-    Node::deserialize().expect("panic message");
-*/
+            match Node::key_position(new_node.clone(), required_key) {
+                Some(x) => {
+                    println!("Key found");
+                    println!("{:?}", x);
+                }
+                None => println!("Key not found"),
+            }*/
+
+    /*    for i in 0..100 {
+            println!("Keys to be deleted?");
+            let required_key = read_num();
+            Node::remove_key(&mut new_node, required_key);
+            println!("{:?}", new_node.lock().unwrap().print_tree());
+        }
+        
+        let k = Node::all_keys_ordered(&mut new_node);
+        for i in 0..k.len() {
+            println!("{} - {}", k[i].key, k[i].value);
+        }
+        
+        Node::serialize(&new_node).expect("panic message");
+        Node::deserialize().expect("panic message");
+    */
 
 
     // Node::crash_recovery()?;
 
-    Ok(())    
+    Ok(())
 }
 
 fn read_num() -> u32 {
@@ -1483,7 +1457,7 @@ impl Node {
         self.print_tree_recursive("", true, 0);
     }
 
-    
+
     /// Recursive helper for tree printing
     fn print_tree_recursive(&self, prefix: &str, is_last: bool, depth: usize) {
         // Print current node
