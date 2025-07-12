@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, Write};
 extern crate rand;
 
 use std::{fs, io};
-use std::sync::{mpsc, Arc, Mutex, MutexGuard};
+use std::sync::{mpsc, Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
 use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::rc::Rc;
@@ -30,7 +30,7 @@ struct Items {
 struct Node {
     input: Vec<Items>,
     rank: u32,
-    children: Vec<Arc<Mutex<Node>>>,
+    children: Vec<Arc<RwLock<Node>>>,
 }
 
 #[derive(Debug)]
@@ -64,8 +64,8 @@ impl Node {
     /// The new Node is wrapped with Arc and Mutex as Mutex allows Thread-safe mutations and Arc allows Mutex to be shared across threads.
     /// As the B-Tree will eventually scale up to concurrency, Arc<Mutex<T>> helps in future proofing the concept.
     ///
-    fn new() -> Arc<Mutex<Node>> {
-        let instance = Arc::new(Mutex::new(Node {
+    fn new() -> Arc<RwLock<Node>> {
+        let instance = Arc::new(RwLock::new(Node {
             input: Vec::new(),
             rank: 1,
             children: Vec::new(),
@@ -75,19 +75,21 @@ impl Node {
 
     // Insert the K-V into the empty node.
     // Todo: Understand why i had to call every function 3 times for correct functioning.
-    fn insert(self_node: Arc<Mutex<Node>>, k: u32, v: String) -> io::Result<()> {
+    fn insert(self_node: Arc<RwLock<Node>>, k: u32, v: String) -> io::Result<()> {
         let cloned_node = Arc::clone(&self_node);
-        let mut z = self_node.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        if !z.input.is_empty() {
-            match Node::temporary_duplicate_key_check(&z, k) {
-                Some(result) => {
-                    println!("MEOW");
-                    return Ok(());
-                }
+        {
+            let mut z = self_node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !z.input.is_empty() {
+                match Node::temporary_duplicate_key_check(&z, k) {
+                    Some(result) => {
+                        println!("MEOW");
+                        return Ok(());
+                    }
 
-                None => {
+                    None => {
 
+                    }
                 }
             }
         }
@@ -123,7 +125,7 @@ impl Node {
     /// # THIS IS A TEMPORARY HACK SOLUTION. IT'LL STAY THERE TILL I ADD AN ACTUAL THREAD SAFE WAL.
     /// ## DO NOT TAKE THIS SERIOUSLY.
     /// ### :(
-    fn temporary_duplicate_key_check(node: &MutexGuard<Node>, key: u32) -> Option<Items> {
+    fn temporary_duplicate_key_check(node: &RwLockReadGuard<Node>, key: u32) -> Option<Items> {
         for i in 0..node.input.len() {
             if node.input[i].key == key {
                 return Some(node.input[i].clone());
@@ -132,15 +134,15 @@ impl Node {
 
         if !node.children.is_empty() {
             if key < node.input[0].key {
-                let guard = node.children[0].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let guard = node.children[0].read().unwrap_or_else(|poisoned| poisoned.into_inner());
                 return Node::temporary_duplicate_key_check(&guard, key);
             } else if key > node.input[node.input.len()-1].key {
-                let guard = node.children.last().unwrap().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let guard = node.children.last().unwrap().read().unwrap_or_else(|poisoned| poisoned.into_inner());
                 return Node::temporary_duplicate_key_check(&guard, key);
             } else {
                 for i in 0..node.input.len() - 1 {
                     if key > node.input[i].key && key < node.input[i+1].key {
-                        let guard = node.children[i+1].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let guard = node.children[i+1].read().unwrap_or_else(|poisoned| poisoned.into_inner());
                         return Node::temporary_duplicate_key_check(&guard, key);
                     }
                 }
@@ -164,31 +166,39 @@ impl Node {
     /// But both the `.unwrap()` are safe, I think.
     ///
     /// - MutexGuard<Node> was used as both return and parameter because it allows reuse during recursion without relocking.
-    fn overflow_check(mut root: MutexGuard<Node>) -> MutexGuard<Node> {
+    fn overflow_check(mut root: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+        let cloned_root = Arc::clone(&root);
         let mut stack = Vec::new();
+        let root_read = root.read().unwrap_or_else(|e| e.into_inner());
 
-        if root.input.len() > *NODE_SIZE.get().unwrap() {
-            return Node::split_nodes(root);
+        if root_read.input.len() > *NODE_SIZE.get().unwrap() {
+            drop(root_read);
+            return Node::split_nodes(cloned_root);
         }
 
-        for child in &root.children {
+        let root_children = &root_read.children;
+        for child in root_children {
             stack.push(Arc::clone(child));
         }
 
         while let Some(node) = stack.pop() {
-            let current = node.lock().unwrap();
-            if current.input.len() > *NODE_SIZE.get().unwrap() {
-                let _unused =  Node::split_nodes(current);
-            } else if !current.children.is_empty() {
-                for child in &current.children {
+            let current_clone = Arc::clone(&node);
+            let current_read = root.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+            if current_read.input.len() > *NODE_SIZE.get().unwrap() {
+                drop(current_read);
+                let _unused =  Node::split_nodes(current_clone);
+            } else if !current_read.children.is_empty() {
+                let current_children = &current_read.children;
+                for child in current_children {
                     stack.push(Arc::clone(child));
                 }
             }
 
         }
 
+        drop(root_read);
         root
-
     }
 
     /// A private function exclusively invoked from `fn overflow_check` only if the selected node is overflowing i.e. The number of keys on the selected node
@@ -216,8 +226,8 @@ impl Node {
     ///
     /// TODO: Edge Cases such as: Mutex for `struct_one` and `struct_two` being poisoned.
     ///
-    fn split_nodes(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
-        let mut self_instance = self_node;         // Mutable instance of self_node.
+    fn split_nodes(self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+        let mut self_instance = self_node.write().unwrap_or_else(|e| e.into_inner());      // Mutable instance of self_node.
 
         self_instance.sort_main_nodes();
 
@@ -233,25 +243,25 @@ impl Node {
             if count == breaking_point {
                 self_instance.input.push(temp_storage.input[count-1].clone()); // Push the middle `Item` as sole parent.
             } else if count < breaking_point {
-                struct_one.lock().unwrap().input.push(temp_storage.input[count-1].clone()); // Push the `Items` with keys smaller than middle key onto struct_one.
-                struct_one.lock().unwrap().input[count - 1].rank = temp_storage.rank + 1; // Set the key rank as parent node's rank + 1.
+                struct_one.write().unwrap().input.push(temp_storage.input[count-1].clone()); // Push the `Items` with keys smaller than middle key onto struct_one.
+                struct_one.write().unwrap().input[count - 1].rank = temp_storage.rank + 1; // Set the key rank as parent node's rank + 1.
             } else if count > breaking_point {
                 i = i + 1; // Variable "i" was used instead of count because `i` denotes the number of keys in struct_two.
-                struct_two.lock().unwrap().input.push(temp_storage.input[count - 1].clone()); // Push the `Items` with keys larger than middle key onto struct_two.
-                struct_two.lock().unwrap().input[i - 1].rank = temp_storage.rank + 1; // Set their key rank as parent node's rank + 1.
+                struct_two.write().unwrap().input.push(temp_storage.input[count - 1].clone()); // Push the `Items` with keys larger than middle key onto struct_two.
+                struct_two.write().unwrap().input[i - 1].rank = temp_storage.rank + 1; // Set their key rank as parent node's rank + 1.
             }
         }
 
         // Set struct_one/two's node rank as parent's node rank + 1.
-        struct_one.lock().unwrap().rank = self_instance.rank + 1;
-        struct_two.lock().unwrap().rank = self_instance.rank + 1;
+        struct_one.write().unwrap().rank = self_instance.rank + 1;
+        struct_two.write().unwrap().rank = self_instance.rank + 1;
 
 
         self_instance.children.push(struct_one);
         self_instance.children.push(struct_two);
 
-
-        self_instance
+        drop(self_instance);
+        self_node
     }
 
     /// Checks for nodes violating the B-tree invariant `children.len() == input.len() + 1`,
@@ -280,28 +290,37 @@ impl Node {
     ///
     /// Variable `temporary_guard` *can* be poisoned but the value of MutexGuard<Node> will be extracted by `unwrap_or_else(...)`.
     /// It's a patchy solution but stay till I add find better solution while redesigning system concurrent.
-    fn tree_integrity_check(mut self_node: MutexGuard<Node>) -> MutexGuard<Node> {
-        let mut stack: Vec<Arc<Mutex<Node>>> = Vec::new();
+    fn tree_integrity_check(mut self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+        let mut stack = Vec::new();
 
-        if self_node.input.len() + 1 != self_node.children.len() && !self_node.children.is_empty() {
+        let self_instance = self_node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if self_instance.input.len() + 1 != self_instance.children.len() && !self_instance.children.is_empty() {
+            drop(self_instance);
             return Node::fix_child_count_mismatch(self_node);
         }
 
-        for child in &self_node.children {
+        let node_children = &self_instance.children;
+
+        for child in node_children {
             stack.push(Arc::clone(child));
         }
 
         while let Some(node) = stack.pop() {
-            let current = node.lock().unwrap();
+            let current_clone = Arc::clone(&node);
+            let current_instance = self_node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
 
-            if current.input.len() + 1 != current.children.len() && !current.children.is_empty() {
-                let _unused = Node::fix_child_count_mismatch(current);
-            } else if !current.children.is_empty() {
-                for child in &current.children {
+            if current_instance.input.len() + 1 != current_instance.children.len() && !current_instance.children.is_empty() {
+                drop(current_instance);
+                let _unused = Node::fix_child_count_mismatch(current_clone);
+            } else if !current_instance.children.is_empty() {
+                let current_children = &current_instance.children;
+                for child in current_children {
                     stack.push(Arc::clone(child));
                 }
             }
         }
+        drop(self_instance);
         self_node
     }
 
@@ -357,23 +376,23 @@ impl Node {
     /// - Replace brute-force overlap detection with sweep-line (reduce from O(N²) to O(N log N)).
     /// - Implement safe locking with error handling (replace `unwrap_or_else`).
     /// - Add poison propagation in case of locking errors.
-    fn fix_child_count_mismatch(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
-        let mut self_instance = self_node;
+    fn fix_child_count_mismatch(self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+        let mut self_instance = self_node.write().unwrap_or_else(|poisoned| poisoned.into_inner());
         let child_len = self_instance.children.len();
 
         for i in 0..child_len {
             // The children cannot be empty as only the nodes with children not empty can invoke the function (!self_instance.children.is_empty())
-            let some_val = self_instance.children[i].lock().unwrap().clone();
+            let some_val = self_instance.children[i].read().unwrap().clone();
             let some_val_input = &some_val.input;
             let keys_primary_required = vec![some_val_input[0].key, some_val_input.last().unwrap().key];
             for j in 0..child_len {
-                let some_other_val = self_instance.children[j].lock().unwrap().clone();
+                let some_other_val = self_instance.children[j].read().unwrap().clone();
                 let some_other_val_input = &some_other_val.input;
                 let keys_secondary_required = vec![some_other_val_input[0].key, some_other_val_input.last().unwrap().key];
 
                 // Checks for overlapping node.
                 if keys_primary_required[0] < keys_secondary_required[0] && keys_primary_required[1] > keys_secondary_required[1] {
-                    let k = Arc::new(Mutex::new(some_val));
+                    let k = Arc::new(RwLock::new(some_val));
                     self_instance.children.push(k); // Pushes the overlapping node to the last index.
                     self_instance.children.remove(i); // Removes the unnecessary overlapping node.
                     break
@@ -388,7 +407,7 @@ impl Node {
             let mut key_nodes: Vec<_> = self_instance.children[len - 2..]
                 .iter()
                 .map(|node| {
-                    let guard = node.lock().unwrap();
+                    let guard = node.read().unwrap();
                     (guard.input[0].key, Arc::clone(node)) // clone Arc, not the Node
                 })
                 .collect();
@@ -406,8 +425,8 @@ impl Node {
 
         // Snippet placed inside a code block because `guard_parent_one` and `guard_parent_two` takes an immutable reference. 
         {
-            let guard_parent_one = self_instance.children[self_instance.children.len() - 2].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let guard_parent_two = self_instance.children[self_instance.children.len() - 1].lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let guard_parent_one = self_instance.children[self_instance.children.len() - 2].read().unwrap_or_else(|p| p.into_inner());
+            let guard_parent_two = self_instance.children[self_instance.children.len() - 1].read().unwrap_or_else(|p| p.into_inner());
 
             let new_parent_one_length = guard_parent_one.input.len();
             let new_parent_two_length = guard_parent_two.input.len();
@@ -447,55 +466,68 @@ impl Node {
 
         // Remove the selected `Items` from child of selected node to its grandchild. 
         for _i in 0..self_instance.children.len() - 2 {
-            let k = self_instance.children[j].lock().unwrap().clone();
+            let k = self_instance.children[j].read().unwrap().clone();
             if k.input[0].key > parent_one_child_boundary[0] && k.input[k.input.len() - 1].key < parent_one_child_boundary[1] {
-                self_instance.children[self_instance.children.len()-2].lock().unwrap().children.push(Arc::new(Mutex::new(k)));
+                self_instance.children[self_instance.children.len()-2].write().unwrap().children.push(Arc::new(RwLock::new(k)));
                 self_instance.children.remove(j);
             } else if k.input[0].key > parent_two_child_boundary[0] && k.input[k.input.len() - 1].key < parent_two_child_boundary[1] {
-                self_instance.children[self_instance.children.len()-1].lock().unwrap().children.push(Arc::new(Mutex::new(k)));
+                self_instance.children[self_instance.children.len()-1].write().unwrap().children.push(Arc::new(RwLock::new(k)));
                 self_instance.children.remove(j);
             } else {
                 j += 1;
             }
         }
-        self_instance
+        drop(self_instance);
+        self_node
     }
 
-    fn rank_correction(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
-        let mut self_instance = self_node;
-        self_instance.sort_main_nodes();
+    fn rank_correction(self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+        let self_children_empty = {
+            let self_read = self_node.read().unwrap();
+            self_read.children.is_empty()
+        };
 
-        if !self_instance.children.is_empty() {
-            for i in 0..self_instance.children.len() {
-                self_instance.children[i].lock().unwrap().rank = self_instance.rank + 1;
-                let len = self_instance.children[i].lock().unwrap().input.len();
-                for j in 0..len {
-                    self_instance.children[i].lock().unwrap().input[j].rank = self_instance.rank + 1;
-                }
-
-                let _unused = Node::rank_correction(self_instance.children[i].lock().unwrap());
-            }
+        if self_children_empty {
+            return self_node;
         }
 
-        self_instance
+        let mut self_write = self_node.write().unwrap();
+        let child_rank = self_write.rank + 1;
+
+        for child_arc in &mut self_write.children {
+            {
+                let mut child_write = child_arc.write().unwrap();
+                child_write.rank = child_rank;
+
+                for item in &mut child_write.input {
+                    item.rank = child_rank;
+                }
+            }
+
+            Node::rank_correction(Arc::clone(child_arc));
+        }
+        drop(self_write);
+
+        self_node
     }
-    fn add_new_keys(self_node : &mut MutexGuard<Node>, mut x: Items){
-        let mut self_instance: &mut MutexGuard<Node> = self_node;
+
+    fn add_new_keys(self_node : Arc<RwLock<Node>>, mut x: Items){
+        let mut self_instance = self_node.read().unwrap();
         if self_instance.children.is_empty() {
+            drop(self_instance);
+            let self_instance = self_node.write().unwrap();
             self_instance.input.push(x.clone());
         } else {
             if x.key < self_instance.input[0].key {
                 if !self_instance.children.is_empty() {
-                    let guard = &mut self_instance.children[0].lock().unwrap();
-                    Node::add_new_keys(guard, x);
+                    Node::add_new_keys(Arc::clone(&self_instance.children[0]), x);
                 } else {
                     x.rank = self_instance.input[0].rank;
                     self_instance.input.push(x);
                 }
             } else if x.key > self_instance.input[self_instance.input.len()-1].key {
                 if !self_instance.children.is_empty() {
-                    let guard = &mut self_instance.children[self_instance.children.len()-1].lock().unwrap();
-                    Node::add_new_keys(guard, x);
+                    Node::add_new_keys(Arc::clone(&self_instance.children[self_instance.children.len()-1]), x);
                 } else {
                     x.rank = self_instance.input[0].rank;
                     self_instance.input.push(x);
@@ -504,8 +536,7 @@ impl Node {
                 for i in 0..self_instance.input.len() - 1 {
                     if x.key > self_instance.input[i].key && x.key < self_instance.input[i+1].key {
                         if !self_instance.children.is_empty() {
-                            let guard = &mut self_instance.children[i+1].lock().unwrap();
-                            Node::add_new_keys(guard, x.clone());
+                            Node::add_new_keys(Arc::clone(&self_instance.children[i+1]), x.clone());
                         } else {
                             x.rank = self_instance.input[0].rank;
                             self_instance.input.push(x.clone());
@@ -543,30 +574,44 @@ impl Node {
     /// # TODO:
     /// - Implement safe locking with error handling (replace [`Result::unwrap_or_else`]).
     /// - Add poison propagation in case of locking errors.
-    fn min_size_check(self_node: MutexGuard<Node>) -> MutexGuard<Node> {
-        let mut x = self_node;
+    fn min_size_check(mut self_node: Arc<RwLock<Node>>) {
+        let read_guard = self_node.read().unwrap();
+        let k = read_guard.children.iter().enumerate();
 
         let mut indices_to_propagate = Vec::new();
-        for (idx, child) in x.children.iter().enumerate() {
-            let child_lock = child.lock().unwrap_or_else(|e| e.into_inner());
-            if child_lock.input.len() < *NODE_SIZE.get().unwrap() / 2 && child_lock.rank > 1 {
+        for (idx, child) in k {
+            let child_read = child.read().unwrap_or_else(|e| e.into_inner());
+            if child_read.input.len() < *NODE_SIZE.get().unwrap() / 2 && child_read.rank > 1 {
                 indices_to_propagate.push(idx);
             }
         }
 
+        drop(read_guard);
+
         for &idx in indices_to_propagate.iter().rev() {
-            let child_clone = x.children[idx].lock().unwrap_or_else(|e| e.into_inner()).clone();
-            x = Node::propagate_up(x, child_clone);
+            let child = {
+                let read_guard = self_node.read().unwrap();
+                Arc::clone(&read_guard.children[idx])
+            };
+            let meow = Arc::clone(&self_node);
+            self_node = Node::propagate_up(meow, child);
         }
 
-        for child in &x.children {
-            let child_lock = child.lock().unwrap_or_else(|e| e.into_inner());
-            if !child_lock.children.is_empty() {
-                let _unused = Node::min_size_check(child_lock);
+            let read_guard = self_node.read().unwrap();
+            let mut y = &read_guard.children;
+
+
+        for child in y {
+            let child_children_empty = {
+                let child_guard = child.read().unwrap_or_else(|e| e.into_inner());
+                child_guard.children.is_empty()
+            };
+            if !child_children_empty {
+                let k = child.clone();
+                Node::min_size_check(k);
             }
         }
 
-        x
     }
 
     /// Private function invoked from [`Node::min_size_check`], ensures all node meet the B-Tree invariant of `input.len() >= NODE_SIZE`.
@@ -633,38 +678,45 @@ impl Node {
     /// - Replace [`Result::unwrap_or_else`] with `safe_lock<T>`
     /// - Propagate poisoning via `Result<MutexGuard<T>, TreeError>`.
     ///
-    fn propagate_up(self_node: MutexGuard<Node>, mut child: Node) -> MutexGuard<Node> {
-        let mut x = self_node;
-        for i in 0..child.input.len() {
-            child.input[i].rank = x.input[0].rank;
-            x.input.push(child.input[i].clone());
-        }
-        for i in 0..child.children.len() {
-            let meow = Arc::clone(&child.children[i]);
-            x.children.push(meow);
-        }
+    fn propagate_up(self_node: Arc<RwLock<Node>>, mut child: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+        let mut self_read = self_node.read().unwrap();
+        let mut child_write = child.write().unwrap();
 
-        let conditional_key = child.input[0].key;
-        let mut to_be_removed = Vec::new();
-
-        for i in 0..x.children.len() - 1 {
-            let child_guard = x.children[i].lock().unwrap();
-            if child_guard.input[0].key == conditional_key {
-                to_be_removed.push(i);
-            }
+        for child_input in &mut child_write.input {
+            child_input.rank = self_read.rank;
         }
+        drop(self_read);
+        drop(child_write);
 
-        for i in to_be_removed.iter().rev() {
-            x.children.remove(*i);
+        let mut self_write = self_node.write().unwrap();
+        let mut child_read = child.read().unwrap();
+
+        let child_len = child_read.children.len();
+        
+        for child_push in child_read.input.clone() {
+            self_write.input.push(child_push);
         }
-        x.sort_main_nodes();
-        x.sort_children_nodes();
+        
+        for i in 0..child_len {
+            self_write.children.push(child_read.children[i].clone());
+        }
+        
+        let conditional_key = child_read.input[0].key;
+        
+        self_write.children.retain(|child_arc| {
+            let child_guard = child_arc.read().unwrap();
+            child_guard.input[0].key != conditional_key
+        });
+        drop(self_write);
+        
+        // x.sort_main_nodes();
+        // x.sort_children_nodes();
 
-        x
+        self_node
     }
 
     fn sort_children_nodes(&mut self) {
-        self.children.sort_by(|a, b| {a.lock().unwrap().input[0].key.cmp(&b.lock().unwrap().input[0].key)});
+        self.children.sort_by(|a, b| {a.read().unwrap().input[0].key.cmp(&b.read().unwrap().input[0].key)});
     }
     fn sort_main_nodes(&mut self) {
         self.input.sort_by(|a, b| {a.key.cmp(&b.key)});
@@ -672,11 +724,11 @@ impl Node {
     fn sort_everything(&mut self) {
         self.sort_main_nodes();
         self.sort_children_nodes();
-
-        let children: Vec<Arc<Mutex<Node>>> = self.children.clone();
+        
+        let children: Vec<Arc<RwLock<Node>>> = self.children.clone();
 
         for child in children {
-            let mut child_guard = child.lock().unwrap();
+            let mut child_guard = child.read().unwrap().clone();
             child_guard.sort_everything();
         }
     }
