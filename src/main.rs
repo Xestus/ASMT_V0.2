@@ -772,12 +772,12 @@ impl Node {
     /// # TODO + WARNING:
     /// - THE SYSTEM CURRENTLY ISN'T CONCURRENT BUT IS CONCURRENCY IS THE NEXT FEATURE TO BE ADDED AFTER WRITE AHEAD LOGIN. PLEASE FORGIVE ME.
     /// - CASES WITH READER/WRITER COLLISION WILL BE HANDLED WITH REPLACEMENT OF MUTEX WITH RWLOCK, DEPENDING UPON NEED. 
-    fn key_position(node: Arc<Mutex<Node>>, key: u32) -> Option<Items> {
-        let mut stack: Vec<Arc<Mutex<Node>>> = Vec::new();
+    fn key_position(node: Arc<RwLock<Node>>, key: u32) -> Option<Items> {
+        let mut stack = Vec::new();
         stack.push(node);
 
         while let Some(node) = stack.pop() {
-            let current = node.lock().unwrap_or_else(|e| e.into_inner());
+            let current = node.read().unwrap_or_else(|e| e.into_inner());
 
             for i in 0..current.input.len() {
                 if current.input[i].key == key {
@@ -802,41 +802,41 @@ impl Node {
         None
     }
 
-    fn remove_key(self_node: &mut Arc<Mutex<Node>>, key: u32) {
+    fn remove_key(self_node: Arc<RwLock<Node>>, key: u32) {
+        let cloned = Arc::clone(&self_node);
         Node::remove_key_extension(self_node, key);
-        let mut x = self_node.lock().unwrap();
-        x = Node::removed_node_check(x);
-
-
+        Node::removed_node_check(cloned);
     }
-    fn remove_key_extension(self_node: &mut Arc<Mutex<Node>>, key: u32) {
-        let mut x = self_node.lock().unwrap();
+    fn remove_key_extension(self_node: Arc<RwLock<Node>>, key: u32) {
         let mut child_removed = false;
-        for i in 0..x.input.len() {
-            if x.input[i].key == key {
-                child_removed = true;
-                x.input.remove(i);
-                break;
-            }
+        let mut x = self_node.write().unwrap();
+        if let Some(p) = x.input.iter().position(|item| item.key == key) {
+            child_removed = true;
+            x.input.remove(p);
         }
 
+        drop(x);
+        let x = self_node.read().unwrap();
+        
         if !child_removed {
             if key < x.input[0].key {
-                return Node::remove_key_extension(&mut x.children[0], key);
+                let cloned = Arc::clone(&x.children[0]);
+                return Node::remove_key_extension(cloned, key);
 
             } else if key > x.input[x.input.len()-1].key {
-                let k = x.children.len();
-                return Node::remove_key_extension(&mut x.children[k-1], key);
+                let cloned = Arc::clone(&x.children.last().unwrap());
+                return Node::remove_key_extension(cloned, key);
             } else {
                 for i in 0..x.input.len() - 1 {
                     if key > x.input[i].key && key < x.input[i+1].key {
-                        return Node::remove_key_extension(&mut x.children[i+1], key);
+                        let cloned = Arc::clone(&x.children[i+1]);
+                        return Node::remove_key_extension(cloned, key);
                     }
                 }
             }
         }
     }
-    fn removed_node_check (self_node: MutexGuard<Node>) -> MutexGuard<Node> {
+    fn removed_node_check (self_node: Arc<RwLock<Node>>) {
         let mut x = self_node;
 
         let mut indices_to_propagate = Vec::new();
@@ -857,23 +857,27 @@ impl Node {
                 Node::removed_node_check(child_lock);
             }
         }
-
-        x
+        
     }
-    fn parent_key_down(self_node: MutexGuard<Node>, idx: usize) -> MutexGuard<Node> {
+    fn parent_key_down(self_node: Arc<RwLock<Node>>, idx: usize) -> Arc<RwLock<Node>> {
         struct Value {
             difference: usize,
             index: usize,
         }
 
-        let mut self_instance = self_node;
+        let mut self_instance = self_node.read().unwrap();
         let break_point = (self_instance.children.len() + 1) / 2;
 
         let mut child_with_keys = false;
         let mut index_vector = Vec::new();
         let mut index_vector_position = Vec::new();
         for i in 0..self_instance.children.len() {
-            if self_instance.children[i].lock().unwrap().input.len() > *NODE_SIZE.get().unwrap() / 2 {
+            let input_len = {
+                let child_guard = self_instance.children[i].read().unwrap();
+                child_guard.input.len()
+            };
+            
+            if input_len > *NODE_SIZE.get().unwrap() / 2 {
                 child_with_keys = true;
                 let mut k = 0;
                 if idx > i {
@@ -885,93 +889,140 @@ impl Node {
                 index_vector.push(i);
             }
         }
-
+        
+        drop(self_instance);
+        
         index_vector_position.sort_by(|a, b| a.difference.cmp(&b.difference));
         if child_with_keys {
-            self_instance = Node::moving_keys(self_instance, idx, index_vector_position[0].index);
+            let k = Arc::clone(&self_node);
+            Node::moving_keys(k, idx, index_vector_position[0].index);
         } else if !child_with_keys {
+            // TODO: Modify the given statement by removing 0 and 1.
             if idx + 1 < break_point {
-                let k = self_instance.input[0].clone();
-                let m = self_instance.children[1].lock().unwrap().input.clone();
-                self_instance.input.remove(0);
-                self_instance.children.remove(1);
-                self_instance.children[0].lock().unwrap().input.push(k);
-                for j in 0..m.len() {
-                    self_instance.children[0].lock().unwrap().input.push(m[j].clone());
+                let self_guard = &mut self_node.write().unwrap();
+                
+                let k = self_guard.input[0].clone();
 
-                }
+                let m = {
+                    let b = self_guard.children[1].read().unwrap();
+                    let c = b.input.clone();
+                    c
+                };
+                
+                self_guard.input.remove(0);
+                self_guard.children.remove(1);
+                
+                // Do we need &mut here?
+                let child_guard = &mut self_guard.children[0].write().unwrap();
+                child_guard.input.push(k);
+                child_guard.input.extend(m);
             }
 
             if idx + 1 > break_point {
-                let input_len = self_instance.input.len() - 1;
-                let child_len = self_instance.children.len() - 1;
-                let k = self_instance.input[input_len].clone();
-                let m = self_instance.children[child_len].lock().unwrap().input.clone();
-                self_instance.input.remove(input_len);
-                self_instance.children.remove(child_len);
-                self_instance.children[child_len - 1].lock().unwrap().input.push(k);
-                for j in 0..m.len() {
-                    self_instance.children[child_len - 1].lock().unwrap().input.push(m[j].clone());
-
-                }
+                let self_guard = &mut self_node.write().unwrap();
+                
+                let input_len = self_guard.input.len() - 1;
+                let child_len = self_guard.children.len() - 1;
+                let k = self_guard.input[input_len].clone();
+                
+                let m = {
+                    let b = self_guard.children[child_len].read().unwrap();
+                    b.input.clone()
+                };
+                self_guard.input.remove(input_len);
+                self_guard.children.remove(child_len);
+                
+                let child_guard = &mut self_guard.children[child_len - 1].write().unwrap();
+                
+                child_guard.input.push(k);
+                child_guard.input.extend(m);
             }
 
             if idx + 1 == break_point {
-                let k = self_instance.input[idx - 1].clone();
-                let m = self_instance.children[idx - 1].lock().unwrap().input.clone();
-                self_instance.input.remove(idx - 1);
-                self_instance.children.remove(idx - 1);
-                self_instance.children[idx - 1].lock().unwrap().input.push(k);
-                for j in 0..m.len() {
-                    self_instance.children[idx - 1].lock().unwrap().input.push(m[j].clone());
+                let self_guard = &mut self_node.write().unwrap();
+                
+                let k = self_guard.input[idx - 1].clone();
+                let m = {
+                    let b = self_guard.children[idx - 1].read().unwrap();
+                    b.input.clone()
+                };
 
-                }
+                self_guard.input.remove(idx - 1);
+                self_guard.children.remove(idx - 1);
+                
+                let child_guard = &mut self_guard.children[idx - 1].write().unwrap();
+                child_guard.input.push(k);
+                child_guard.input.extend(m);
             }
         }
-        self_instance
+        self_node
     }
-    fn moving_keys(self_node:MutexGuard<Node>, idx1: usize, idx2: usize) -> MutexGuard<Node> {
-        let mut self_instance = self_node;
-
+    fn moving_keys(mut self_node: Arc<RwLock<Node>>, idx1: usize, idx2: usize) {
         if idx1 < idx2 {
-            let m = self_instance.input[idx2-1].clone();
-            let k = self_instance.children[idx2].lock().unwrap().input[0].clone();
-            self_instance.input.remove(idx2 - 1);
-            self_instance.children[idx2].lock().unwrap().input.remove(0);
+            let self_guard = &mut self_node.write().unwrap();
+            let m = self_guard.input[idx2 - 1].clone();
+            let k = {
+                let child_guard = self_guard.children[idx2].read().unwrap();
+                child_guard.input[0].clone()
+            };
+            self_guard.input.remove(idx2 - 1);         
+            self_guard.input.push(k);
 
-            self_instance.input.push(k);
-            self_instance.children[idx2 - 1].lock().unwrap().input.push(m);
+            {
+                let child_guard = &mut self_guard.children[idx2].write().unwrap();
+                child_guard.input.remove(0);
+            }
+            {
+                let child_guard = &mut self_guard.children[idx2 - 1].write().unwrap();
+                child_guard.input.push(m);
+            }
         } else if idx1 > idx2 {
-            let m = self_instance.input[idx2].clone();
-            let len = self_instance.children[idx2].lock().unwrap().input.len();
-            let k = self_instance.children[idx2].lock().unwrap().input[len - 1].clone();
-            self_instance.input.remove(idx2);
-            self_instance.children[idx2].lock().unwrap().input.remove(len - 1);
-
-            self_instance.input.push(k);
-            self_instance.children[idx2+1].lock().unwrap().input.push(m);
-
-        }
-        self_instance.sort_everything();
-        if self_instance.children[idx1].lock().unwrap().input.len() < *NODE_SIZE.get().unwrap() / 2 {
-            if idx1 < idx2 {
-                self_instance = Node::moving_keys(self_instance, idx1, idx2-1);
-            } else if idx1 > idx2 {
-                self_instance = Node::moving_keys(self_instance, idx1, idx2+1);
+            let self_guard = &mut self_node.write().unwrap();
+            
+            let m = self_guard.input[idx2].clone();
+            
+            let (k,len) = {
+                let child_guard = self_guard.children[idx2].read().unwrap();
+                let a = child_guard.input.len();
+                let b = child_guard.input[a - 1].clone();
+                (b,a)
+            };
+            self_guard.input.remove(idx2);
+            self_guard.input.push(k);
+            {
+                let child_guard = &mut self_guard.children[idx2].write().unwrap();
+                child_guard.input.remove(len - 1);
+            }
+            {
+                let child_guard = &mut self_guard.children[idx2 + 1].write().unwrap();
+                child_guard.input.push(m);
             }
         }
-
-        self_instance
+        // self_node.sort_everything();
+        let length = {
+            let self_guard = self_node.read().unwrap();
+            let child_guard = self_guard.children[idx1].read().unwrap();
+            child_guard.input.len()
+        };
+        if length < *NODE_SIZE.get().unwrap() / 2 {
+            if idx1 < idx2 {
+                let k = Arc::clone(&self_node);
+                Node::moving_keys(k, idx1, idx2-1);
+            } else if idx1 > idx2 {
+                let k = Arc::clone(&self_node);
+                Node::moving_keys(k, idx1, idx2+1);
+            }
+        }
     }
 
-    fn all_keys_ordered(node: &Arc<Mutex<Node>>) -> Vec<Items> {
+    fn all_keys_ordered(node: Arc<RwLock<Node>>) -> Vec<Items> {
         let mut result = Vec::new();
         Self::collect_keys_inorder(node, &mut result);
         result
     }
 
-    fn collect_keys_inorder(node: &Arc<Mutex<Node>>, result: &mut Vec<Items>) {
-        let node_instance = node.lock().unwrap();
+    fn collect_keys_inorder(node: Arc<RwLock<Node>>, result: &mut Vec<Items>) {
+        let node_instance = node.read().unwrap();
 
         if node_instance.children.is_empty() {
             for i in 0..node_instance.input.len() {
@@ -979,14 +1030,14 @@ impl Node {
             }
         } else {
             for i in 0..node_instance.input.len() {
-                Node::collect_keys_inorder(&node_instance.children[i], result);
+                Node::collect_keys_inorder(Arc::clone(&node_instance.children[i]), result);
                 result.push(node_instance.input[i].clone());
             }
-            Node::collect_keys_inorder(&node_instance.children[node_instance.input.len()], result);
+            Node::collect_keys_inorder(Arc::clone(&node_instance.children[node_instance.input.len()]), result);
         }
     }
 
-    fn serialize(node: Arc<Mutex<Node>>) -> io::Result<()>  {
+    fn serialize(node: Arc<RwLock<Node>>) -> io::Result<()>  {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -998,8 +1049,8 @@ impl Node {
         Ok(())
     }
 
-    fn serialization(node: Arc<Mutex<Node>>, file: &mut File) {
-        let node_instance = node.lock().unwrap();
+    fn serialization(node: Arc<RwLock<Node>>, file: &mut File) {
+        let node_instance = node.read().unwrap();
         let l = node_instance.input.len();
         writeln!(file, "[{:X}]", node_instance.rank).expect("Error writing to file.");
         writeln!(file, "[{:X}]", l).expect("panic message");
@@ -1020,7 +1071,7 @@ impl Node {
         }
     }
 
-    fn deserialize() -> io::Result<(Arc<Mutex<Node>>)> {
+    fn deserialize() -> io::Result<(Arc<RwLock<Node>>)> {
         let file = File::open("example.txt")?;
         let metadata = fs::metadata("example.txt")?;
         if metadata.len() == 0 {
@@ -1166,7 +1217,7 @@ impl Node {
         println!("{:?}", k.print_tree());
         println!("###############################################");
 
-        let k = Arc::new(Mutex::new(k));
+        let k = Arc::new(RwLock::new(k));
 
         Ok(k)
     }
@@ -1197,30 +1248,25 @@ impl Node {
         x
     }
 
-    fn deserialized_duplicate_data_check(self_node: Node) -> Node {
-        let mut self_instance = self_node;
-        let mut dup_child_len = self_instance.children.len()/2;
-
-        /*        for i in 0..child_len {
-                    let child_2_len = self_instance.children[i].lock().unwrap().children.len();
-                    println!(" child_2_len: {} {:?}", child_2_len, self_instance.print_tree());
-                    
-                    let inp_len = self_instance.children[i].lock().unwrap().input.len();
-                    if inp_len + 1 != child_2_len {
-                        self_instance.children.remove(0);
-                    }
-                }*/
+    fn deserialized_duplicate_data_check(mut self_node: Node) -> Node {
+        let dup_child_len = self_node.children.len()/2;
+        
 
         let mut i = 0;
-        while i < self_instance.children.len() {
-            let first_child = self_instance.children[i].lock().unwrap().input.clone();
+        while i < self_node.children.len() {
+            let first_child = {
+                let child_one_guard = self_node.children[i].read().unwrap();
+                child_one_guard.input[0].clone()
+            };
             let mut found_duplicate = false;
 
-            for j in (i + 1)..self_instance.children.len() {
-                let second_child = self_instance.children[j].lock().unwrap().input.clone();
-
-                if first_child[0] == second_child[0] {
-                    self_instance.children.remove(i);
+            for j in (i + 1)..self_node.children.len() {
+                let second_child = {
+                    let child_two_guard = self_node.children[j].read().unwrap();
+                    child_two_guard.input[0].clone()
+                };
+                if first_child == second_child {
+                    self_node.children.remove(i);
                     found_duplicate = true;
                     break;
                 }
@@ -1232,15 +1278,15 @@ impl Node {
         }
 
         for i in 0..dup_child_len {
-            let child_child_len = self_instance.children[i].lock().unwrap().children.len();
-            let mut x = self_instance.children[i].lock().unwrap().clone();
+            let child_guard = self_node.children[i].read().unwrap();
+            let child_child_len = child_guard.children.len();
+            let x = child_guard.clone();
+            drop(child_guard);
             if child_child_len > 0 {
-                self_instance.children[i] = Arc::new(Mutex::new(Node::deserialized_duplicate_data_check(x)));
+                self_node.children[i] = Arc::new(RwLock::new(Node::deserialized_duplicate_data_check(x)));
             }
         }
-
-        self_instance
-
+        self_node
     }
 
     fn deserialized_data_to_nodes(deserialized_data: UltraDeserialized) -> Node {
@@ -1253,7 +1299,7 @@ impl Node {
             let child_len = deserialized_data.children.len();
             let mut child_vec = Vec::new();
             for j in 0..child_len {
-                let k = Arc::new(Mutex::new(Node::deserialized_data_to_nodes(deserialized_data.children[j].clone())));
+                let k = Arc::new(RwLock::new(Node::deserialized_data_to_nodes(deserialized_data.children[j].clone())));
                 child_vec.push(k);
             }
             new_node.children = child_vec;
@@ -1261,9 +1307,8 @@ impl Node {
 
         new_node
     }
-
-
-    fn crash_recovery(node: Arc<Mutex<Node>>) -> io::Result<()> {
+    
+    fn crash_recovery(node: Arc<RwLock<Node>>) -> io::Result<()> {
         let file_path = "WAL.txt";
         let mut file = File::open(file_path)?;
         let mut contents = String::new();
@@ -1297,8 +1342,8 @@ impl Node {
         Ok(())
     }
 
-    fn wal_updated(mut file: Arc<Mutex<File>>,k: u32, v: String, thread_name: String) -> io::Result<()> {
-        let mut file_instance = file.lock().unwrap();
+    fn wal_updated(file: Arc<RwLock<File>>,k: u32, v: String, thread_name: String) -> io::Result<()> {
+        let mut file_instance = file.write().unwrap();
         let lsn = COUNTER.load(Ordering::SeqCst);
 
         writeln!(file_instance, "{:?} {:?} {:?} {:?}", lsn, k, v, thread_name).expect("TODO: panic message");
@@ -1309,8 +1354,8 @@ impl Node {
         Ok(())
     }
 
-    fn wal_read(mut file: Arc<Mutex<File>>) -> io::Result<String> {
-        let mut file = file.lock().unwrap();
+    fn wal_read(file: Arc<RwLock<File>>) -> io::Result<String> {
+        let mut file = file.write().unwrap();
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
         println!("ZZ {}", contents);
