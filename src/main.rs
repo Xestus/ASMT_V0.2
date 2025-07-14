@@ -75,9 +75,7 @@ impl Node {
 
     // Insert the K-V into the empty node.
     // Todo: Understand why i had to call every function 3 times for correct functioning.
-    fn insert(self_node: Arc<RwLock<Node>>, k: u32, v: String) -> io::Result<()> {
-        let cloned_node = Arc::clone(&self_node);
-
+    fn insert(mut self_node: Arc<RwLock<Node>>, k: u32, v: String) -> io::Result<()> {
         {
             let mut z = self_node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
             if !z.input.is_empty() {
@@ -95,29 +93,28 @@ impl Node {
         }
 
 
-        Node::add_new_keys(&mut z, Items {key: k, value: v.clone(), rank: 1 } );
+        Node::add_new_keys(Arc::clone(&self_node), Items {key: k, value: v.clone(), rank: 1 } );
 
-        z = Node::overflow_check(z);
-        z = Node::min_size_check(z);
-        z.sort_main_nodes();
-        z.sort_children_nodes();
-        z = Node::tree_integrity_check(z);
-
-        z = Node::min_size_check(z);
-
-        z = Node::overflow_check(z);
-
-
-        z = Node::min_size_check(z);
-        z.sort_main_nodes();
-        z = Node::tree_integrity_check(z);
-        z = Node::rank_correction(z);
-        z.sort_everything();
-        z = Node::overflow_check(z);
-        z = Node::min_size_check(z);
-        z = Node::tree_integrity_check(z);
-        z = Node::rank_correction(z);
-        z.sort_everything();
+        self_node = Node::overflow_check(self_node);
+        self_node = Node::min_size_check(self_node);
+        self_node = Node::sort_main_nodes(self_node);
+        self_node = Node::sort_children_nodes(self_node);
+        
+        self_node = Node::tree_integrity_check(self_node);
+        self_node = Node::min_size_check(self_node);
+        self_node = Node::overflow_check(self_node);
+        
+        self_node = Node::min_size_check(self_node);
+        self_node = Node::sort_main_nodes(self_node);
+        self_node = Node::tree_integrity_check(self_node);
+        self_node = Node::rank_correction(self_node);
+        self_node = Node::sort_everything(self_node);
+        
+        self_node = Node::overflow_check(self_node);
+        self_node = Node::min_size_check(self_node);
+        self_node = Node::tree_integrity_check(self_node);
+        self_node = Node::rank_correction(self_node);
+        self_node = Node::sort_everything(self_node);
 
         Ok(())
     }
@@ -151,8 +148,7 @@ impl Node {
 
         None
     }
-
-
+    
     /// A maintenance function responsible for checking overflows on designated nodes.
     /// The function recursively check children of the current Node only if the children exists and the node itself isn't overflowing.
     /// If the current node has its key count greater than maximum designated value, a function "split_node" is invoked which splits overflowing node by relocating
@@ -166,7 +162,7 @@ impl Node {
     /// But both the `.unwrap()` are safe, I think.
     ///
     /// - MutexGuard<Node> was used as both return and parameter because it allows reuse during recursion without relocking.
-    fn overflow_check(mut root: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+    fn overflow_check(root: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
         let cloned_root = Arc::clone(&root);
         let mut stack = Vec::new();
         let root_read = root.read().unwrap_or_else(|e| e.into_inner());
@@ -226,11 +222,10 @@ impl Node {
     ///
     /// TODO: Edge Cases such as: Mutex for `struct_one` and `struct_two` being poisoned.
     ///
-    fn split_nodes(self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+    fn split_nodes(mut self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+        self_node = Node::sort_main_nodes(self_node);
         let mut self_instance = self_node.write().unwrap_or_else(|e| e.into_inner());      // Mutable instance of self_node.
-
-        self_instance.sort_main_nodes();
-
+        
         let struct_one = Node::new(); // Holds keys smaller than middle key.
         let struct_two = Node::new(); // Holds keys larger than middle key.
 
@@ -512,10 +507,8 @@ impl Node {
     }
 
     fn add_new_keys(self_node : Arc<RwLock<Node>>, mut x: Items){
-        let mut self_instance = self_node.read().unwrap();
+        let self_instance = &mut self_node.write().unwrap();
         if self_instance.children.is_empty() {
-            drop(self_instance);
-            let self_instance = self_node.write().unwrap();
             self_instance.input.push(x.clone());
         } else {
             if x.key < self_instance.input[0].key {
@@ -545,9 +538,6 @@ impl Node {
                 }
             }
         }
-
-
-        self_instance.sort_main_nodes();
     }
 
     /// Checks for nodes violating the B-tree invariant `input.len() >= NODE_SIZE/2`
@@ -574,7 +564,7 @@ impl Node {
     /// # TODO:
     /// - Implement safe locking with error handling (replace [`Result::unwrap_or_else`]).
     /// - Add poison propagation in case of locking errors.
-    fn min_size_check(mut self_node: Arc<RwLock<Node>>) {
+    fn min_size_check(mut self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
         let read_guard = self_node.read().unwrap();
         let k = read_guard.children.iter().enumerate();
 
@@ -597,10 +587,9 @@ impl Node {
             self_node = Node::propagate_up(meow, child);
         }
 
-            let read_guard = self_node.read().unwrap();
-            let mut y = &read_guard.children;
-
-
+        let read_guard = self_node.read().unwrap();
+        let y = &read_guard.children;
+        
         for child in y {
             let child_children_empty = {
                 let child_guard = child.read().unwrap_or_else(|e| e.into_inner());
@@ -611,6 +600,9 @@ impl Node {
                 Node::min_size_check(k);
             }
         }
+        
+        drop(read_guard);
+        self_node
 
     }
 
@@ -678,8 +670,8 @@ impl Node {
     /// - Replace [`Result::unwrap_or_else`] with `safe_lock<T>`
     /// - Propagate poisoning via `Result<MutexGuard<T>, TreeError>`.
     ///
-    fn propagate_up(self_node: Arc<RwLock<Node>>, mut child: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
-        let mut self_read = self_node.read().unwrap();
+    fn propagate_up(mut self_node: Arc<RwLock<Node>>,child: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+        let self_read = self_node.read().unwrap();
         let mut child_write = child.write().unwrap();
 
         for child_input in &mut child_write.input {
@@ -709,28 +701,37 @@ impl Node {
         });
         drop(self_write);
         
-        // x.sort_main_nodes();
-        // x.sort_children_nodes();
-
+        self_node = Node::sort_main_nodes(self_node);
+        self_node = Node::sort_children_nodes(self_node);
+        
         self_node
     }
 
-    fn sort_children_nodes(&mut self) {
-        self.children.sort_by(|a, b| {a.read().unwrap().input[0].key.cmp(&b.read().unwrap().input[0].key)});
+    fn sort_children_nodes(self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+        let mut self_write = self_node.write().unwrap();
+        self_write.children.sort_by(|a, b| {a.read().unwrap().input[0].key.cmp(&b.read().unwrap().input[0].key)});
+        drop(self_write);
+        self_node
     }
-    fn sort_main_nodes(&mut self) {
-        self.input.sort_by(|a, b| {a.key.cmp(&b.key)});
+    fn sort_main_nodes(self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+        let mut self_write = self_node.write().unwrap();
+        self_write.input.sort_by(|a, b| {a.key.cmp(&b.key)});
+        drop(self_write);
+        self_node
     }
-    fn sort_everything(&mut self) {
-        self.sort_main_nodes();
-        self.sort_children_nodes();
-        
-        let children: Vec<Arc<RwLock<Node>>> = self.children.clone();
+    fn sort_everything(mut self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+        self_node = Node::sort_main_nodes(self_node);
+        self_node = Node::sort_children_nodes(self_node);
+
+        let self_read = self_node.write().unwrap();
+        let children = self_read.children.clone();
 
         for child in children {
-            let mut child_guard = child.read().unwrap().clone();
-            child_guard.sort_everything();
+            Node::sort_everything(child);
         }
+        
+        drop(self_read);
+        self_node
     }
 
     /// Searches selected key from a pre-defined B-Tree. If found, returns [`Option::Some(Items)`].
@@ -801,7 +802,6 @@ impl Node {
         }
         None
     }
-
     fn remove_key(self_node: Arc<RwLock<Node>>, key: u32) {
         let cloned = Arc::clone(&self_node);
         Node::remove_key_extension(self_node, key);
@@ -836,25 +836,30 @@ impl Node {
             }
         }
     }
-    fn removed_node_check (self_node: Arc<RwLock<Node>>) {
-        let mut x = self_node;
+    fn removed_node_check (mut self_node: Arc<RwLock<Node>>) {
+        let read_guard = self_node.read().unwrap();
 
         let mut indices_to_propagate = Vec::new();
-        for (idx, child) in x.children.iter().enumerate() {
-            let child_lock = child.lock().unwrap();
+        for (idx, child) in read_guard.children.iter().enumerate() {
+            let child_lock = child.read().unwrap();
             if child_lock.input.len() < *NODE_SIZE.get().unwrap() / 2 && child_lock.rank > 1 {
                 indices_to_propagate.push(idx);
             }
         }
+        
+        drop(read_guard);
 
         for &idx in indices_to_propagate.iter().rev() {
-            x = Node::parent_key_down(x, idx);
+            let meow = Arc::clone(&self_node);
+            self_node = Node::parent_key_down(meow, idx);
         }
-
-        for child in &x.children {
-            let mut child_lock = child.lock().unwrap();
+        
+        let read_guard = self_node.read().unwrap();
+        for child in &read_guard.children {
+            let mut child_lock = child.read().unwrap();
             if !child_lock.children.is_empty() {
-                Node::removed_node_check(child_lock);
+                drop(child_lock);
+                Node::removed_node_check(child.clone());
             }
         }
         
@@ -998,7 +1003,8 @@ impl Node {
                 child_guard.input.push(m);
             }
         }
-        // self_node.sort_everything();
+        
+        self_node = Node::sort_everything(self_node);
         let length = {
             let self_guard = self_node.read().unwrap();
             let child_guard = self_guard.children[idx1].read().unwrap();
@@ -1391,8 +1397,8 @@ fn main() -> io::Result<()> {
         .read(true)
         .open("WAL.txt")?;
 
-    let file = Arc::new(Mutex::new(file));
-    let file_read = Arc::new(Mutex::new(file_read));
+    let file = Arc::new(RwLock::new(file));
+    let file_read = Arc::new(RwLock::new(file_read));
     let mut new_node = Node::new();
     let random_keys = vec![
         42, 763, 198, 571, 925, 314, 689, 147, 832, 456, 259, 673, 918, 34, 507, 742, 189, 621, 954, 276,395, 718, 153, 864, 237, 589, 426, 971, 64, 802,
@@ -1497,7 +1503,7 @@ fn main() -> io::Result<()> {
         Node::wal(&file, &mut new_node,15, String::from("Woof"));*/
 
     let sad = Arc::clone(&new_node);
-    println!("{:?}", new_node.lock().unwrap().print_tree());
+    println!("{:?}", new_node.read().unwrap().print_tree());
     /*    Node::serialize(sad).expect("panic message");
         Node::deserialize().expect("panic message");
     */
@@ -1583,7 +1589,7 @@ impl Node {
         for (i, child_arc) in self.children.iter().enumerate() {
             let is_last_child = i == self.children.len() - 1;
 
-            match child_arc.lock() {
+            match child_arc.read() {
                 Ok(child) => {
                     child.print_tree_recursive(&child_prefix, is_last_child, depth + 1);
                 }
@@ -1626,7 +1632,7 @@ impl Node {
                  self.rank);
 
         for (i, child_arc) in self.children.iter().enumerate() {
-            match child_arc.lock() {
+            match child_arc.read() {
                 Ok(child) => {
                     if i == 0 && !self.children.is_empty() {
                         println!("{}Children:", "  ".repeat(level + 1));
@@ -1667,7 +1673,7 @@ impl Node {
         } else {
             stats.internal_nodes += 1;
             for child_arc in &self.children {
-                if let Ok(child) = child_arc.lock() {
+                if let Ok(child) = child_arc.read() {
                     child.calculate_stats_recursive(stats, depth + 1);
                 }
             }
