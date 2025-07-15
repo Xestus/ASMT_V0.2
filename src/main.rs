@@ -95,7 +95,6 @@ impl Node {
 
         Node::add_new_keys(Arc::clone(&self_node), Items {key: k, value: v.clone(), rank: 1 } );
         self_node = Node::overflow_check(self_node);
-        println!("Q");
         self_node = Node::min_size_check(self_node);
         self_node = Node::sort_main_nodes(self_node);
         self_node = Node::sort_children_nodes(self_node);
@@ -105,11 +104,7 @@ impl Node {
 
         self_node = Node::min_size_check(self_node);
 
-
-        println!("MEOW 1 ");
-        println!("{:?}", self_node.read().unwrap().print_tree());
         self_node = Node::overflow_check(self_node);
-        println!("MEOW");
 
         self_node = Node::min_size_check(self_node);
         self_node = Node::sort_main_nodes(self_node);
@@ -126,7 +121,7 @@ impl Node {
         Ok(())
     }
 
-    /// # THIS IS A TEMPORARY HACK SOLUTION. IT'LL STAY THERE TILL I ADD AN ACTUAL THREAD SAFE WAL.
+    /// # THIS IS A TEMPORARY HACK SOLUTION. IT'LL STAY THERE TILL I ADD AN ACTUAL THREAD SAFE FUNCTION.
     /// ## DO NOT TAKE THIS SERIOUSLY.
     /// ### :(
     fn temporary_duplicate_key_check(node: &RwLockReadGuard<Node>, key: u32) -> Option<Items> {
@@ -514,10 +509,8 @@ impl Node {
     fn add_new_keys(self_node : Arc<RwLock<Node>>, mut x: Items){
         let self_instance = &mut self_node.write().unwrap();
         if self_instance.children.is_empty() {
-            println!("C");
             self_instance.input.push(x.clone());
         } else {
-            println!("B");
             if x.key < self_instance.input[0].key {
                 if !self_instance.children.is_empty() {
                     Node::add_new_keys(Arc::clone(&self_instance.children[0]), x);
@@ -780,16 +773,16 @@ impl Node {
     /// # TODO + WARNING:
     /// - THE SYSTEM CURRENTLY ISN'T CONCURRENT BUT IS CONCURRENCY IS THE NEXT FEATURE TO BE ADDED AFTER WRITE AHEAD LOGIN. PLEASE FORGIVE ME.
     /// - CASES WITH READER/WRITER COLLISION WILL BE HANDLED WITH REPLACEMENT OF MUTEX WITH RWLOCK, DEPENDING UPON NEED. 
-    fn key_position(node: Arc<RwLock<Node>>, key: u32) -> Option<Items> {
+    fn key_position(node: Arc<RwLock<Node>>, key: u32) -> Option<String> {
         let mut stack = Vec::new();
         stack.push(node);
 
-        while let Some(node) = stack.pop() {
-            let current = node.read().unwrap_or_else(|e| e.into_inner());
+        while let Some(self_node) = stack.pop() {
+            let current = self_node.read().unwrap_or_else(|e| e.into_inner());
 
             for i in 0..current.input.len() {
                 if current.input[i].key == key {
-                    return Some(current.input[i].clone());
+                    return Some(current.input[i].value.clone());
                 }
             }
 
@@ -1327,15 +1320,11 @@ impl Node {
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
 
-        let mut file = File::create(file_path)?;
-        file.write_all(b"")?;
-
         let mut meow = Vec::new();
         for line in contents.lines() {
             let mut k = Vec::new();
             for mut c in line.split_whitespace() {
                 c = c.trim_matches('"');
-                // c = c.trim_matches('\0');
                 k.push(c.to_string());
             }
             meow.push(k);
@@ -1351,6 +1340,12 @@ impl Node {
                 Node::insert(s, i[1].parse().unwrap(), i[2].clone()).expect("TODO: panic message");
             }
         }
+        let mut file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(file_path)?;
+
+        file.write_all(b"")?;
 
         Ok(())
     }
@@ -1366,29 +1361,35 @@ impl Node {
 
         Ok(())
     }
-
-    fn wal_read(file: Arc<RwLock<File>>) -> io::Result<String> {
-        let mut file = file.write().unwrap();
+    
+    fn wal_immediate_read(file: Arc<RwLock<File>>, node: Arc<RwLock<Node>>, k: u32) -> io::Result<Option<String>> {
+        let mut file_instance = file.write().unwrap();
         let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
-        println!("ZZ {}", contents);
+        file_instance.read_to_string(&mut contents)?;
 
-        Ok(contents)
-    }
-
-    fn receiver_decode(contents: String) -> io::Result<()> {
-        let mut lines = Vec::new();
+        let mut meow = Vec::new();
         for line in contents.lines() {
             let mut k = Vec::new();
             for mut c in line.split_whitespace() {
                 c = c.trim_matches('"');
                 k.push(c.to_string());
             }
-            lines.push(k);
+            meow.push(k);
         }
-
-        Ok(())
+        
+        for i in meow.iter() {
+            let wal_key = i[1].parse::<u32>().unwrap();
+            
+            if wal_key == k {
+                return Ok(Some(i[1].to_string()));
+            }
+        }
+        
+        let result = Node::key_position(node,k);
+        
+        Ok(result)
     }
+
 }
 
 fn main() -> io::Result<()> {
@@ -1416,19 +1417,17 @@ fn main() -> io::Result<()> {
         539, 872, 215, 568, 901, 334, 667, 20, 495, 828, 273, 616, 959, 392, 725, 158, 521, 854, 289, 632, 975, 408, 741, 164, 517, 880, 323, 656, 991, 444,
         777, 110, 473, 836, 201, 564, 927, 350, 683, 136, 509, 842, 277, 620, 963, 398, 731, 999, 597, 940];
 
-    println!("{:?}", random_keys.len());
-
     // let random_keys: Vec<u32> = (0..100).map(|_| rand::thread_rng().gen_range(0, 1_00_000)).collect();
     let keys2 = random_keys.clone();
     let mut c = 0;
-    for i in random_keys {
+/*    for i in random_keys {
         let k = Arc::clone(&file);
         // Node::wal_updated(k, i, String::from("Woof"), String::from("A"));
         Node::insert(Arc::clone(&new_node), i, String::from("Woof"))?;
         c = c + 1;
         println!("ZZZ {}-{} {:?}", c,i, new_node.read().unwrap_or_else(|e| e.into_inner()).print_tree());
-    }
-/*    let t1 = {
+    }*/
+    let t1 = {
         let file = Arc::clone(&file);
         thread::spawn(move || {
             let mut c = 0;
@@ -1476,7 +1475,7 @@ fn main() -> io::Result<()> {
     t1.join().unwrap();
     t2.join().unwrap();
     t3.join().unwrap();
-*/
+
     /*        let mut c = 0;
             for i in 0..50 {
                 let sec = rand::thread_rng().gen_range(1, 1000);
