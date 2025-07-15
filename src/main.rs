@@ -77,7 +77,7 @@ impl Node {
     // Todo: Understand why i had to call every function 3 times for correct functioning.
     fn insert(mut self_node: Arc<RwLock<Node>>, k: u32, v: String) -> io::Result<()> {
         {
-            let mut z = self_node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let z = self_node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
             if !z.input.is_empty() {
                 match Node::temporary_duplicate_key_check(&z, k) {
                     Some(result) => {
@@ -94,16 +94,23 @@ impl Node {
 
 
         Node::add_new_keys(Arc::clone(&self_node), Items {key: k, value: v.clone(), rank: 1 } );
-
         self_node = Node::overflow_check(self_node);
+        println!("Q");
         self_node = Node::min_size_check(self_node);
         self_node = Node::sort_main_nodes(self_node);
         self_node = Node::sort_children_nodes(self_node);
-        
+
         self_node = Node::tree_integrity_check(self_node);
+
+
         self_node = Node::min_size_check(self_node);
+
+
+        println!("MEOW 1 ");
+        println!("{:?}", self_node.read().unwrap().print_tree());
         self_node = Node::overflow_check(self_node);
-        
+        println!("MEOW");
+
         self_node = Node::min_size_check(self_node);
         self_node = Node::sort_main_nodes(self_node);
         self_node = Node::tree_integrity_check(self_node);
@@ -179,7 +186,7 @@ impl Node {
 
         while let Some(node) = stack.pop() {
             let current_clone = Arc::clone(&node);
-            let current_read = root.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let current_read = node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
 
             if current_read.input.len() > *NODE_SIZE.get().unwrap() {
                 drop(current_read);
@@ -285,7 +292,7 @@ impl Node {
     ///
     /// Variable `temporary_guard` *can* be poisoned but the value of MutexGuard<Node> will be extracted by `unwrap_or_else(...)`.
     /// It's a patchy solution but stay till I add find better solution while redesigning system concurrent.
-    fn tree_integrity_check(mut self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+    fn tree_integrity_check(self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
         let mut stack = Vec::new();
 
         let self_instance = self_node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -296,15 +303,13 @@ impl Node {
         }
 
         let node_children = &self_instance.children;
-
         for child in node_children {
             stack.push(Arc::clone(child));
         }
 
         while let Some(node) = stack.pop() {
             let current_clone = Arc::clone(&node);
-            let current_instance = self_node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
-
+            let current_instance = node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
             if current_instance.input.len() + 1 != current_instance.children.len() && !current_instance.children.is_empty() {
                 drop(current_instance);
                 let _unused = Node::fix_child_count_mismatch(current_clone);
@@ -509,8 +514,10 @@ impl Node {
     fn add_new_keys(self_node : Arc<RwLock<Node>>, mut x: Items){
         let self_instance = &mut self_node.write().unwrap();
         if self_instance.children.is_empty() {
+            println!("C");
             self_instance.input.push(x.clone());
         } else {
+            println!("B");
             if x.key < self_instance.input[0].key {
                 if !self_instance.children.is_empty() {
                     Node::add_new_keys(Arc::clone(&self_instance.children[0]), x);
@@ -1413,14 +1420,15 @@ fn main() -> io::Result<()> {
 
     // let random_keys: Vec<u32> = (0..100).map(|_| rand::thread_rng().gen_range(0, 1_00_000)).collect();
     let keys2 = random_keys.clone();
-    /*    for i in random_keys {
-            let k = Arc::clone(&new_node);
-            Node::wal_updated(&file, i, String::from("Woof"), lsn_count);
-            lsn_count += 1;
-            c = c + 1;
-            println!("ZZZ {}-{} {:?}", c,i, new_node.lock().unwrap_or_else(|e| e.into_inner()).print_tree());
-        }*/
-    let t1 = {
+    let mut c = 0;
+    for i in random_keys {
+        let k = Arc::clone(&file);
+        // Node::wal_updated(k, i, String::from("Woof"), String::from("A"));
+        Node::insert(Arc::clone(&new_node), i, String::from("Woof"))?;
+        c = c + 1;
+        println!("ZZZ {}-{} {:?}", c,i, new_node.read().unwrap_or_else(|e| e.into_inner()).print_tree());
+    }
+/*    let t1 = {
         let file = Arc::clone(&file);
         thread::spawn(move || {
             let mut c = 0;
@@ -1468,7 +1476,7 @@ fn main() -> io::Result<()> {
     t1.join().unwrap();
     t2.join().unwrap();
     t3.join().unwrap();
-
+*/
     /*        let mut c = 0;
             for i in 0..50 {
                 let sec = rand::thread_rng().gen_range(1, 1000);
