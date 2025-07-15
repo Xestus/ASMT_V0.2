@@ -3,7 +3,7 @@ use crate::rand::Rng;
 use std::io::{BufRead, BufReader, Write};
 extern crate rand;
 
-use std::{fs, io};
+use std::{env, fs, io};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
 use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,6 +15,7 @@ use std::mem::zeroed;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
+use clap::{Parser, Subcommand};
 
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
@@ -1048,7 +1049,7 @@ impl Node {
             .write(true)
             .create(true)
             .truncate(true)
-            .open("example.txt")?;
+            .open("/home/_meringue/RustroverProjects/ASMT-V1/example.txt")?;
 
         writeln!(file, "[0]").expect("TODO: panic message");
         Node::serialization(node, &mut file);
@@ -1078,8 +1079,8 @@ impl Node {
     }
 
     fn deserialize() -> io::Result<(Arc<RwLock<Node>>)> {
-        let file = File::open("example.txt")?;
-        let metadata = fs::metadata("example.txt")?;
+        let file = File::open("/home/_meringue/RustroverProjects/ASMT-V1/example.txt")?;
+        let metadata = fs::metadata("/home/_meringue/RustroverProjects/ASMT-V1/example.txt")?;
         if metadata.len() == 0 {
             return Ok(Node::new());
         }
@@ -1315,7 +1316,7 @@ impl Node {
     }
     
     fn crash_recovery(node: Arc<RwLock<Node>>) -> io::Result<()> {
-        let file_path = "WAL.txt";
+        let file_path = "/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt";
         let mut file = File::open(file_path)?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
@@ -1340,26 +1341,75 @@ impl Node {
                 Node::insert(s, i[1].parse().unwrap(), i[2].clone()).expect("TODO: panic message");
             }
         }
-        let mut file = OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(file_path)?;
+        
+        match Node::serialize(Arc::clone(&node)) {
+            Ok(_) => {
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(file_path)?;
 
-        file.write_all(b"")?;
+                file.write_all(b"")?;
+            },
+            Err(e) => {
+                println!("{}", e);
+            }
+        }
 
         Ok(())
     }
 
     fn wal_updated(file: Arc<RwLock<File>>,k: u32, v: String, thread_name: String) -> io::Result<()> {
+        let mut last_lsm = 100;
+        match Node::find_last_lsn() {
+            Ok(value) => {
+                println!("Last lsn: {}", value);
+                last_lsm = value;
+            }
+            Err(e) => {
+                println!("{}", e);
+            }
+        }
         let mut file_instance = file.write().unwrap();
-        let lsn = COUNTER.load(Ordering::SeqCst);
 
-        writeln!(file_instance, "{:?} {:?} {:?} {:?}", lsn, k, v, thread_name).expect("TODO: panic message");
+        writeln!(file_instance, "{:?} {:?} {:?} {:?}", last_lsm + 1, k, v, thread_name).expect("TODO: panic message");
         file_instance.sync_all()?;
 
         COUNTER.fetch_add(1, Ordering::SeqCst);
 
         Ok(())
+    }
+
+    fn find_last_lsn() -> io::Result<(u32)> {
+        let mut file = File::open("WAL.txt")?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+
+        println!("{:?}", contents);
+        if contents.is_empty() {
+            println!("No last lsn");
+            return Ok(100)
+        }
+        let mut meow = Vec::new();
+        for line in contents.lines() {
+            let mut k = Vec::new();
+            for mut c in line.split_whitespace() {
+                c = c.trim_matches('"');
+                k.push(c.to_string());
+            }
+            meow.push(k);
+        }
+
+        let mut last_lsm = 1;
+
+        for i in meow.iter() {
+            last_lsm = i[0].parse::<u32>().unwrap();
+        }
+
+        println!("ZZZ {}", last_lsm);
+        drop(file);
+
+        Ok(last_lsm)
     }
     
     fn wal_immediate_read(file: Arc<RwLock<File>>, node: Arc<RwLock<Node>>, k: u32) -> io::Result<Option<String>> {
@@ -1389,25 +1439,50 @@ impl Node {
         
         Ok(result)
     }
+}
 
+#[derive(Parser)]
+#[command(name = "WAT")]
+#[command(about = "WATERMELON")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Insert {
+        key: u32,
+        value: String,
+    }
 }
 
 fn main() -> io::Result<()> {
     NODE_SIZE.set(4).expect("Failed to set size");
+    
+    let mut new_node = Node::new();
+    let deserialize_result = Node::deserialize();
+    println!("A");
+    match deserialize_result {
+        Ok(deserialized) => {
+            new_node = deserialized;
+        }
+        
+        Err(e) => {
+            println!("{}", e);
+        }
+    }
 
     let file = OpenOptions::new()
-        .write(true)
+        .append(true)
         .create(true)
-        .truncate(true)
-        .open("WAL.txt")?;
+        .open("/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt")?;
 
     let file_read = OpenOptions::new()
         .read(true)
-        .open("WAL.txt")?;
-
+        .open("/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt")?;
     let file = Arc::new(RwLock::new(file));
     let file_read = Arc::new(RwLock::new(file_read));
-    let mut new_node = Node::new();
     let random_keys = vec![
         42, 763, 198, 571, 925, 314, 689, 147, 832, 456, 259, 673, 918, 34, 507, 742, 189, 621, 954, 276,395, 718, 153, 864, 237, 589, 426, 971, 64, 802,
         345, 678, 913, 52, 729, 184, 537, 860, 293, 998, 478, 815, 126, 369, 702, 945, 211, 584, 837, 162, 497, 730, 85, 412, 759, 204, 631, 978, 351, 694,
@@ -1417,7 +1492,6 @@ fn main() -> io::Result<()> {
         539, 872, 215, 568, 901, 334, 667, 20, 495, 828, 273, 616, 959, 392, 725, 158, 521, 854, 289, 632, 975, 408, 741, 164, 517, 880, 323, 656, 991, 444,
         777, 110, 473, 836, 201, 564, 927, 350, 683, 136, 509, 842, 277, 620, 963, 398, 731, 999, 597, 940];
 
-    // let random_keys: Vec<u32> = (0..100).map(|_| rand::thread_rng().gen_range(0, 1_00_000)).collect();
     let keys2 = random_keys.clone();
     let mut c = 0;
 /*    for i in random_keys {
@@ -1427,7 +1501,7 @@ fn main() -> io::Result<()> {
         c = c + 1;
         println!("ZZZ {}-{} {:?}", c,i, new_node.read().unwrap_or_else(|e| e.into_inner()).print_tree());
     }*/
-    let t1 = {
+/*    let t1 = {
         let file = Arc::clone(&file);
         thread::spawn(move || {
             let mut c = 0;
@@ -1474,77 +1548,20 @@ fn main() -> io::Result<()> {
 
     t1.join().unwrap();
     t2.join().unwrap();
-    t3.join().unwrap();
+    t3.join().unwrap();*/
 
-    /*        let mut c = 0;
-            for i in 0..50 {
-                let sec = rand::thread_rng().gen_range(1, 1000);
-                let k = Arc::clone(&new_node);
-                Node::insert(k, sec, String::from("Woof"));
-                c = c + 1;
-                println!("{} - {}", c, sec);
-            }*/
+    let cli = Cli::parse();
 
 
-    /*    let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open("WAL.txt")?;
-    
-    
-        Node::wal(&file, &mut new_node, 1, String::from("Woof"));
-        Node::wal(&file, &mut new_node,2, String::from("Woof"));
-        Node::wal(&file, &mut new_node,3, String::from("Woof"));
-        Node::wal(&file, &mut new_node,4, String::from("Woof"));
-        Node::wal(&file, &mut new_node,5, String::from("Woof"));
-        Node::wal(&file, &mut new_node,6, String::from("Woof"));
-        Node::wal(&file, &mut new_node,7, String::from("Woof"));
-        Node::wal(&file, &mut new_node,8, String::from("Woof"));
-        Node::wal(&file, &mut new_node,9, String::from("Woof"));
-        Node::wal(&file, &mut new_node,10, String::from("Woof"));
-        Node::wal(&file, &mut new_node,11, String::from("Woof"));
-        Node::wal(&file, &mut new_node,12, String::from("Woof"));
-        Node::wal(&file, &mut new_node,13, String::from("Woof"));
-        Node::wal(&file, &mut new_node,14, String::from("Woof"));
-        Node::wal(&file, &mut new_node,15, String::from("Woof"));*/
+    match &cli.command {
+        Commands::Insert { key, value } => {
+            println!("L");
+            Node::wal_updated(Arc::clone(&file), *key, value.clone(), String::from("A"));
+        }
+    }
 
-    let sad = Arc::clone(&new_node);
     println!("{:?}", new_node.read().unwrap().print_tree());
-    /*    Node::serialize(sad).expect("panic message");
-        Node::deserialize().expect("panic message");
-    */
 
-    /*    println!("Key to be discovered?");
-        let required_key = read_num();
-    
-    
-            match Node::key_position(new_node.clone(), required_key) {
-                Some(x) => {
-                    println!("Key found");
-                    println!("{:?}", x);
-                }
-                None => println!("Key not found"),
-            }*/
-
-    /*    for i in 0..100 {
-            println!("Keys to be deleted?");
-            let required_key = read_num();
-            Node::remove_key(&mut new_node, required_key);
-            println!("{:?}", new_node.lock().unwrap().print_tree());
-        }
-        
-        let k = Node::all_keys_ordered(&mut new_node);
-        for i in 0..k.len() {
-            println!("{} - {}", k[i].key, k[i].value);
-        }
-        
-        Node::serialize(&new_node).expect("panic message");
-        Node::deserialize().expect("panic message");
-    */
-
-
-    // Node::crash_recovery()?;
 
     Ok(())
 }
