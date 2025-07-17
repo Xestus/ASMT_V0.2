@@ -1084,7 +1084,6 @@ impl Node {
         if metadata.len() == 0 {
             return Ok(Node::new());
         }
-        println!("{:?}", metadata);
 
         let read = BufReader::new(file);
 
@@ -1107,7 +1106,6 @@ impl Node {
                     .collect();
 
                 vec.push(U32OrString::Str(result));
-                // println!("{}", result);
             }
 
             else if single_bracket.is_match(k) || double_bracket.is_match(k) {
@@ -1220,10 +1218,6 @@ impl Node {
         let mut k = Node::deserialized_data_to_nodes(x);
         k = Node::deserialized_duplicate_data_check(k);
 
-        println!("###############################################");
-        println!("{:?}", k.print_tree());
-        println!("###############################################");
-
         let k = Arc::new(RwLock::new(k));
 
         Ok(k)
@@ -1315,11 +1309,34 @@ impl Node {
         new_node
     }
     
-    fn crash_recovery(node: Arc<RwLock<Node>>) -> io::Result<()> {
+    fn crash_recovery(mut node: Arc<RwLock<Node>>) -> io::Result<()> {
+        let deserialize_result = Node::deserialize();
+        match deserialize_result {
+            Ok(deserialized) => {
+                node = deserialized;
+            }
+            Err(e) => {
+                println!("{}", e);
+            }
+        }
+        
         let file_path = "/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt";
         let mut file = File::open(file_path)?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
+
+        let mut file_lsm_read = File::open("/home/_meringue/RustroverProjects/ASMT-V1/lsmTracker.txt")?;
+        let mut lsm_values = String::new();
+        file_lsm_read.read_to_string(&mut lsm_values)?;
+        let lsm_read_metadata = fs::metadata("/home/_meringue/RustroverProjects/ASMT-V1/lsmTracker.txt")?;
+        let mut lsm_last = 0;
+        if lsm_read_metadata.len() != 0 {
+            lsm_last = {
+                let str = lsm_values.lines().last().unwrap();
+                str.parse::<u32>().unwrap_or(0)
+            };        
+        }
+
 
         let mut meow = Vec::new();
         for line in contents.lines() {
@@ -1330,18 +1347,38 @@ impl Node {
             }
             meow.push(k);
         }
-
+        
+        let mut last_lsm = 99;
         for i in meow.iter() {
-            let k = i[1].parse::<u32>().unwrap();
-            let z = Arc::clone(&node);
-            let result =  Node::key_position(z, k);
+            let lsm = i[0].parse::<u32>().unwrap();
+            
+            if lsm_last > lsm {
+                let k = i[1].parse::<u32>().unwrap();
+                let z = Arc::clone(&node);
+                let result =  Node::key_position(z, k);
 
-            if result.is_none() {
-                let s = Arc::clone(&node);
-                Node::insert(s, i[1].parse().unwrap(), i[2].clone()).expect("TODO: panic message");
+                if result.is_none() {
+                    let s = Arc::clone(&node);
+                    Node::insert(s, i[1].parse().unwrap(), i[2].clone()).expect("TODO: panic message");
+                }
+
+                if last_lsm < lsm {
+                    last_lsm = lsm
+                }
             }
         }
-        
+
+        let mut lsm_file = OpenOptions::new()
+            .write(true)
+            .append(true)
+            .open("/home/_meringue/RustroverProjects/ASMT-V1/lsmTracker.txt")?;
+        writeln!(lsm_file, "{:?}", last_lsm).expect("TODO: panic message");
+        Ok(())
+    }
+    
+    fn checkpoint(mut node: Arc<RwLock<Node>>) -> io::Result<()> {
+        let file_path = "/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt";
+
         match Node::serialize(Arc::clone(&node)) {
             Ok(_) => {
                 let mut file = OpenOptions::new()
@@ -1360,10 +1397,9 @@ impl Node {
     }
 
     fn wal_updated(file: Arc<RwLock<File>>,k: u32, v: String, thread_name: String) -> io::Result<()> {
-        let mut last_lsm = 100;
+        let mut last_lsm = 99;
         match Node::find_last_lsn() {
             Ok(value) => {
-                println!("Last lsn: {}", value);
                 last_lsm = value;
             }
             Err(e) => {
@@ -1381,14 +1417,14 @@ impl Node {
     }
 
     fn find_last_lsn() -> io::Result<(u32)> {
-        let mut file = File::open("WAL.txt")?;
+        let mut file = File::open("/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt")?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
 
         println!("{:?}", contents);
+
         if contents.is_empty() {
-            println!("No last lsn");
-            return Ok(100)
+            return Ok(99)
         }
         let mut meow = Vec::new();
         for line in contents.lines() {
@@ -1406,16 +1442,15 @@ impl Node {
             last_lsm = i[0].parse::<u32>().unwrap();
         }
 
-        println!("ZZZ {}", last_lsm);
         drop(file);
 
         Ok(last_lsm)
     }
     
-    fn wal_immediate_read(file: Arc<RwLock<File>>, node: Arc<RwLock<Node>>, k: u32) -> io::Result<Option<String>> {
-        let mut file_instance = file.write().unwrap();
+    fn wal_immediate_read(node: Arc<RwLock<Node>>, k: u32) -> io::Result<Option<String>> {
+        let mut file = File::open("/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt")?;
         let mut contents = String::new();
-        file_instance.read_to_string(&mut contents)?;
+        file.read_to_string(&mut contents)?;
 
         let mut meow = Vec::new();
         for line in contents.lines() {
@@ -1431,7 +1466,7 @@ impl Node {
             let wal_key = i[1].parse::<u32>().unwrap();
             
             if wal_key == k {
-                return Ok(Some(i[1].to_string()));
+                return Ok(Some(i[2].to_string()));
             }
         }
         
@@ -1454,20 +1489,24 @@ enum Commands {
     Insert {
         key: u32,
         value: String,
-    }
+    },
+    Push,
+    Get {
+        key: u32,
+    },
+    Tree,
+    Stats,
 }
 
+// HACK: EVERY FILE IS PRE-INSERTED FOR EASE. TODO: MODIFY THEM TO SUPPORT CUSTOM FILE LATER ON.
 fn main() -> io::Result<()> {
     NODE_SIZE.set(4).expect("Failed to set size");
     
     let mut new_node = Node::new();
-    let deserialize_result = Node::deserialize();
-    println!("A");
-    match deserialize_result {
-        Ok(deserialized) => {
-            new_node = deserialized;
+    match Node::deserialize() {
+        Ok(node) => {
+            new_node = node;
         }
-        
         Err(e) => {
             println!("{}", e);
         }
@@ -1555,12 +1594,40 @@ fn main() -> io::Result<()> {
 
     match &cli.command {
         Commands::Insert { key, value } => {
-            println!("L");
-            Node::wal_updated(Arc::clone(&file), *key, value.clone(), String::from("A"));
+            println!("Inserting key {}", key);
+            Node::wal_updated(Arc::clone(&file), *key, value.clone(), String::from("A"))?;
+            println!("Inserted");
+        }
+        
+        Commands::Push => {
+            println!("Pushing disk values to in-memory B-Tree");
+            Node::crash_recovery(Arc::clone(&new_node))?;
+            println!("Pushed disk values");
+        }
+
+        Commands::Get {key} => {
+            match Node::wal_immediate_read(Arc::clone(&new_node), *key) {
+                Ok(Some(value)) => {
+                    println!("{}", value);
+                }
+                Ok(None) => {
+                    println!("No value found");
+                }
+                Err(e) => {
+                    println!("{}", e);
+                }
+            }
+        }
+
+        Commands::Tree => {
+            println!("{:?}", new_node.read().unwrap().print_tree());
+        }
+        
+        Commands::Stats => {
+            println!("{:?}", new_node.read().unwrap().print_stats());
         }
     }
 
-    println!("{:?}", new_node.read().unwrap().print_tree());
 
 
     Ok(())
@@ -1626,7 +1693,6 @@ impl Node {
         }
     }
 
-    /// Format the items in a readable way
     fn format_items(&self) -> String {
         if self.input.is_empty() {
             return "empty".to_string();
