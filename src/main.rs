@@ -153,8 +153,8 @@ impl Node {
     }
     
     /// A maintenance function responsible for checking overflows on designated nodes.
-    /// The function recursively check children of the current Node only if the children exists and the node itself isn't overflowing.
-    /// If the current node has its key count greater than maximum designated value, a function "split_node" is invoked which splits overflowing node by relocating
+    /// The function iteratively checks children of the current Node only if the children exists and the node itself isn't overflowing.
+    /// If the current node has its key count greater than maximum designated value, [`Node::split_nodes`] is invoked which splits overflowing node by relocating
     /// keys smaller and larger than middle keys as its children, while middle key stays at the same level.
     ///
     /// The function is expected to be called right and only after insertion.
@@ -813,6 +813,7 @@ impl Node {
         let mut x = self_node.write().unwrap();
         if let Some(p) = x.input.iter().position(|item| item.key == key) {
             child_removed = true;
+            println!("Deleted the key at rank {:?}", x.rank);
             x.input.remove(p);
         }
 
@@ -1309,7 +1310,7 @@ impl Node {
         new_node
     }
     
-    fn crash_recovery(mut node: Arc<RwLock<Node>>) -> io::Result<()> {
+    fn crash_recovery(mut node: Arc<RwLock<Node>>) -> io::Result<(Arc<RwLock<Node>>)> {
         let deserialize_result = Node::deserialize();
         match deserialize_result {
             Ok(deserialized) => {
@@ -1319,25 +1320,13 @@ impl Node {
                 println!("{}", e);
             }
         }
-        
         let file_path = "/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt";
+      
         let mut file = File::open(file_path)?;
         let mut contents = String::new();
+
         file.read_to_string(&mut contents)?;
-
-        let mut file_lsm_read = File::open("/home/_meringue/RustroverProjects/ASMT-V1/lsmTracker.txt")?;
-        let mut lsm_values = String::new();
-        file_lsm_read.read_to_string(&mut lsm_values)?;
-        let lsm_read_metadata = fs::metadata("/home/_meringue/RustroverProjects/ASMT-V1/lsmTracker.txt")?;
-        let mut lsm_last = 0;
-        if lsm_read_metadata.len() != 0 {
-            lsm_last = {
-                let str = lsm_values.lines().last().unwrap();
-                str.parse::<u32>().unwrap_or(0)
-            };        
-        }
-
-
+        
         let mut meow = Vec::new();
         for line in contents.lines() {
             let mut k = Vec::new();
@@ -1348,32 +1337,34 @@ impl Node {
             meow.push(k);
         }
         
-        let mut last_lsm = 99;
         for i in meow.iter() {
-            let lsm = i[0].parse::<u32>().unwrap();
+            let k = i[1].parse::<u32>().unwrap();
+            let z = Arc::clone(&node);
+            let result =  Node::key_position(z, k);
+
+            if result.is_none() {
+                let s = Arc::clone(&node);
+                Node::insert(s, i[1].parse().unwrap(), i[2].clone()).expect("TODO: panic message");
+            }
+        }
+        
+        println!("{:?}", node.read().unwrap().print_tree());
+        
+        match Node::serialize(Arc::clone(&node)) {
+            Ok(_) => {
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(file_path)?;
+                file.write_all(b"")?;
+            },
             
-            if lsm_last > lsm {
-                let k = i[1].parse::<u32>().unwrap();
-                let z = Arc::clone(&node);
-                let result =  Node::key_position(z, k);
-
-                if result.is_none() {
-                    let s = Arc::clone(&node);
-                    Node::insert(s, i[1].parse().unwrap(), i[2].clone()).expect("TODO: panic message");
-                }
-
-                if last_lsm < lsm {
-                    last_lsm = lsm
-                }
+            Err(e) => {
+                println!("{}", e);
             }
         }
 
-        let mut lsm_file = OpenOptions::new()
-            .write(true)
-            .append(true)
-            .open("/home/_meringue/RustroverProjects/ASMT-V1/lsmTracker.txt")?;
-        writeln!(lsm_file, "{:?}", last_lsm).expect("TODO: panic message");
-        Ok(())
+        Ok(node)
     }
     
     fn checkpoint(mut node: Arc<RwLock<Node>>) -> io::Result<()> {
@@ -1474,6 +1465,37 @@ impl Node {
         
         Ok(result)
     }
+    
+    //TODO: Fix deleting.
+    fn wal_immediate_delete(node: Arc<RwLock<Node>>, key: u32) -> io::Result<()> {
+        let file_path = "/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt";
+        let mut file = File::open(file_path)?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(file_path)?;
+
+        for line in contents.lines() {
+            let mut k = Vec::new();
+            for mut c in line.split_whitespace() {
+                c = c.trim_matches('"');
+                k.push(c.to_string());
+            }
+            
+            if k[1].parse::<u32>().unwrap() != key {
+                writeln!(file, "{:?}", contents)?;
+            } else {
+                println!("Deleted the key at LSM {:?}", k[0]);
+            }
+        }
+        
+        Node::remove_key(Arc::clone(&node), key);
+        
+        Ok(())
+    }
 }
 
 #[derive(Parser)]
@@ -1481,7 +1503,7 @@ impl Node {
 #[command(about = "WATERMELON")]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -1589,9 +1611,147 @@ fn main() -> io::Result<()> {
     t2.join().unwrap();
     t3.join().unwrap();*/
 
-    let cli = Cli::parse();
+
+    println!("CLI!");
+    println!("Enter 'Help' for available commands & 'exit' to quit.");
+
+    loop {
+        print!(">  ");
+        io::stdout().flush().unwrap();
+
+        let mut cli_input = String::new();
+
+        match io::stdin().read_line(&mut cli_input) {
+            Ok(_) => {
+                let cli_input = cli_input.trim();
+
+                if cli_input.is_empty() {
+                    continue;
+                }
+
+                let args = cli_input.split_whitespace().collect::<Vec<&str>>();
+
+                if args.is_empty() {
+                    continue;
+                }
+
+                match args[0].to_lowercase().as_str() {
+                    "insert" => {
+                        if args.len() != 3 {
+                            println!("Invalid argument");
+                            continue;
+                        }
+
+                        let key = args[1].parse::<u32>().expect("Invalid argument");
+                        let value = args[2].parse::<String>().expect("Invalid argument");
+
+                        println!("Inserting key {}", key);
+                        Node::wal_updated(Arc::clone(&file), key, value, String::from("A"))?;
+                        println!("Inserted");
+                    }
+
+                    "push" => {
+                        if args.len() != 1 {
+                            println!("Invalid argument");
+                            continue;
+                        }
+
+                        println!("Pushing disk values to in-memory B-Tree");
+                        let returned_node = Node::crash_recovery(Arc::clone(&new_node))?;
+                        new_node = returned_node;
+                        println!("Pushed disk values");
+                    }
+
+                    "get" => {
+                        if args.len() != 2 {
+                            println!("Invalid argument");
+                            continue;
+                        }
+
+                        let key = args[1].parse::<u32>().expect("Invalid argument");
+
+                        match Node::wal_immediate_read(Arc::clone(&new_node), key) {
+                            Ok(Some(value)) => {
+                                println!("{}", value);
+                            }
+                            Ok(None) => {
+                                println!("No value found");
+                            }
+                            Err(e) => {
+                                println!("{}", e);
+                            }
+                        }
+                    }
+                    
+                    "delete" => {
+                        if args.len() != 2 {
+                            println!("Invalid argument");
+                            continue;
+                        }
+                        
+                        let key = args[1].parse::<u32>().expect("Invalid argument");
+                        
+                        Node::wal_immediate_delete(Arc::clone(&new_node), key)?;
+                    }
+
+                    "tree" => {
+                        if args.len() != 1 {
+                            println!("Invalid argument");
+                            continue;
+                        }
+
+                        println!("{:?}", new_node.read().unwrap().print_tree());
+                    }
+
+                    "stats" => {
+                        if args.len() != 1 {
+                            println!("Invalid argument");
+                            continue;
+                        }
+
+                        println!("{:?}", new_node.read().unwrap().print_stats());
+                    }
+
+                    "help" => {
+                        if args.len() != 1 {
+                            println!("Invalid argument");
+                            continue;
+                        }
+
+                        println!("  insert <key> <value>  - Insert a key-value pair");
+                        println!("  push                  - Push inserted key-value to B-Tree");
+                        println!("  get <key>             - Get value for a key");
+                        println!("  delete <key>          - Delete a key");
+                        println!("  tree                  - Show B-Tree in ASCII art form");
+                        println!("  stats                 - Show B-Tree Stats");
+                        println!("  help                  - Show this help");
+                        println!("  exit                  - Exit the program");
+                    }
+
+                    "exit" => {
+                        if args.len() != 1 {
+                            println!("Invalid argument");
+                            continue;
+                        }
+
+                        println!("Exiting");
+                        break;
+                    }
+
+                    _ => {
+                        println!("Unknown command: {}. Type 'help' for available commands.", args[0]);
+                    }
+                }
+            }
+            Err(e) => {
+                println!("Invalid argument. Error: {:?}",e );;
+            }
+        }
+    }
 
 
+
+/*    let cli = Cli::parse();
     match &cli.command {
         Commands::Insert { key, value } => {
             println!("Inserting key {}", key);
@@ -1626,7 +1786,7 @@ fn main() -> io::Result<()> {
         Commands::Stats => {
             println!("{:?}", new_node.read().unwrap().print_stats());
         }
-    }
+    }*/
 
 
 
