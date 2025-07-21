@@ -20,6 +20,7 @@ use clap::{Parser, Subcommand};
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
 static COUNTER: AtomicUsize = AtomicUsize::new(100);
+static CHECKPOINT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, PartialEq, Ord, PartialOrd, Eq, Hash)]
 struct Items {
@@ -1465,7 +1466,7 @@ impl Node {
         
         Ok(result)
     }
-    
+
     //TODO: Fix deleting.
     fn wal_immediate_delete(node: Arc<RwLock<Node>>, key: u32) -> io::Result<()> {
         let file_path = "/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt";
@@ -1647,6 +1648,7 @@ fn main() -> io::Result<()> {
 
                         println!("Inserting key {}", key);
                         Node::wal_updated(Arc::clone(&file), key, value, String::from("A"))?;
+                        CHECKPOINT_COUNTER.fetch_add(1, Ordering::Relaxed);
                         println!("Inserted");
                     }
 
@@ -1655,11 +1657,7 @@ fn main() -> io::Result<()> {
                             println!("Invalid argument");
                             continue;
                         }
-
-                        println!("Pushing disk values to in-memory B-Tree");
-                        let returned_node = Node::crash_recovery(Arc::clone(&new_node))?;
-                        new_node = returned_node;
-                        println!("Pushed disk values");
+                        new_node = push_to_memory(Arc::clone(&new_node))?;
                     }
 
                     "get" => {
@@ -1721,7 +1719,7 @@ fn main() -> io::Result<()> {
                         println!("  insert <key> <value>  - Insert a key-value pair");
                         println!("  push                  - Push inserted key-value to B-Tree");
                         println!("  get <key>             - Get value for a key");
-                        println!("  delete <key>          - Delete a key");
+                        println!("  delete <key>          - Delete a key (Broken Sorry)");
                         println!("  tree                  - Show B-Tree in ASCII art form");
                         println!("  stats                 - Show B-Tree Stats");
                         println!("  help                  - Show this help");
@@ -1742,55 +1740,29 @@ fn main() -> io::Result<()> {
                         println!("Unknown command: {}. Type 'help' for available commands.", args[0]);
                     }
                 }
+                let metadata = fs::metadata("WAL.txt")?;
+                let size = metadata.len();
+                
+                if CHECKPOINT_COUNTER.load(Ordering::Relaxed) >= 100 && size >= 1024 {
+                    println!("Maximum WAL file size exceeded.");
+                    new_node = push_to_memory(Arc::clone(&new_node))?;
+                }
             }
             Err(e) => {
                 println!("Invalid argument. Error: {:?}",e );;
             }
         }
     }
-
-
-
-/*    let cli = Cli::parse();
-    match &cli.command {
-        Commands::Insert { key, value } => {
-            println!("Inserting key {}", key);
-            Node::wal_updated(Arc::clone(&file), *key, value.clone(), String::from("A"))?;
-            println!("Inserted");
-        }
-        
-        Commands::Push => {
-            println!("Pushing disk values to in-memory B-Tree");
-            Node::crash_recovery(Arc::clone(&new_node))?;
-            println!("Pushed disk values");
-        }
-
-        Commands::Get {key} => {
-            match Node::wal_immediate_read(Arc::clone(&new_node), *key) {
-                Ok(Some(value)) => {
-                    println!("{}", value);
-                }
-                Ok(None) => {
-                    println!("No value found");
-                }
-                Err(e) => {
-                    println!("{}", e);
-                }
-            }
-        }
-
-        Commands::Tree => {
-            println!("{:?}", new_node.read().unwrap().print_tree());
-        }
-        
-        Commands::Stats => {
-            println!("{:?}", new_node.read().unwrap().print_stats());
-        }
-    }*/
-
-
-
     Ok(())
+}
+
+fn push_to_memory(node: Arc<RwLock<Node>>) -> io::Result<Arc<RwLock<Node>>> {
+    println!("Pushing disk values to in-memory B-Tree");
+    let returned_node = Node::crash_recovery(node);
+    CHECKPOINT_COUNTER.store(0, Ordering::Relaxed);
+    println!("Pushed disk values");
+    returned_node
+
 }
 
 fn read_num() -> u32 {
