@@ -1544,81 +1544,31 @@ fn main() -> io::Result<()> {
         .read(true)
         .open("/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt")?;
     let file = Arc::new(RwLock::new(file));
-    let file_read = Arc::new(RwLock::new(file_read));
-    let random_keys = vec![
-        42, 763, 198, 571, 925, 314, 689, 147, 832, 456, 259, 673, 918, 34, 507, 742, 189, 621, 954, 276,395, 718, 153, 864, 237, 589, 426, 971, 64, 802,
-        345, 678, 913, 52, 729, 184, 537, 860, 293, 998, 478, 815, 126, 369, 702, 945, 211, 584, 837, 162, 497, 730, 85, 412, 759, 204, 631, 978, 351, 694,
-        127, 480, 823, 268, 615, 952, 379, 706, 143, 890, 527, 174, 641, 908, 325, 658, 193, 546, 879, 232, 417, 750, 95, 362, 795, 248, 583, 916, 471, 804,
-        139, 576, 921, 354, 687, 122, 469, 812, 257, 690, 35, 428, 773, 160, 523, 886, 311, 644, 977, 402, 735, 108, 451, 798, 265, 618, 953, 386, 719, 154,
-        171, 504, 857, 292, 625, 988, 453, 786, 119, 552, 895, 330, 663, 996, 429, 762, 195, 548, 911, 374, 737, 100, 463, 816, 251, 604, 947, 380, 713, 166,
-        539, 872, 215, 568, 901, 334, 667, 20, 495, 828, 273, 616, 959, 392, 725, 158, 521, 854, 289, 632, 975, 408, 741, 164, 517, 880, 323, 656, 991, 444,
-        777, 110, 473, 836, 201, 564, 927, 350, 683, 136, 509, 842, 277, 620, 963, 398, 731, 999, 597, 940];
+    let (tx, rx) = mpsc::channel();
+    
+    println!("CLI!");
+    println!("Enter 'Help' for available commands & 'exit' to quit.");
+    
+    let cloned_node = Arc::clone(&new_node);
 
-    let keys2 = random_keys.clone();
-    let mut c = 0;
-/*    for i in random_keys {
-        let k = Arc::clone(&file);
-        // Node::wal_updated(k, i, String::from("Woof"), String::from("A"));
-        Node::insert(Arc::clone(&new_node), i, String::from("Woof"))?;
-        c = c + 1;
-        println!("ZZZ {}-{} {:?}", c,i, new_node.read().unwrap_or_else(|e| e.into_inner()).print_tree());
-    }*/
-/*    let t1 = {
-        let file = Arc::clone(&file);
-        thread::spawn(move || {
-            let mut c = 0;
-            for i in random_keys {
-                let k = Arc::clone(&file);
-                Node::wal_updated(k, i, String::from("Woof"), String::from("A"));
-                c = c + 1;
+    let (sender, receiver) = mpsc::channel();
+    let t1 = thread::spawn(move || {
+        while let Ok(_) = rx.recv() {
+            match push_to_memory(Arc::clone(&cloned_node)) {
+                Ok(output_node) => {
+                    sender.send(output_node).unwrap();
+                }
+                Err(e) => {
+                    println!("{}", e);
+                }
             }
-        })
-    };
-
-    let t2 = {
-        thread::spawn(move || {
-            let mut c = 0;
-            for i in keys2 {
-                let k = Arc::clone(&file);
-                Node::wal_updated(k, i, String::from("Woof"), String::from("B"));
-                c = c + 1;
-            }
-            // Node::serialize(new_node).expect("panic message");
-            // Node::deserialize().expect("panic message");
-        })
-    };
-
-    let mut kount = 0;
-    let node_clone = Arc::clone(&new_node);
-    let t3 = thread::spawn(move || {
-        loop {
-            let k = Arc::clone(&file_read);
-            let arc_clone = Arc::clone(&node_clone);
-            if kount == 10 {
-                break;
-            }
-
-            // Node::wal_read(k).unwrap();
-            Node::crash_recovery(arc_clone);
-            thread::sleep(Duration::from_millis(50));
-
-            kount += 1;
         }
-
     });
 
 
-    t1.join().unwrap();
-    t2.join().unwrap();
-    t3.join().unwrap();*/
-
-
-    println!("CLI!");
-    println!("Enter 'Help' for available commands & 'exit' to quit.");
-
     loop {
         print!(">  ");
-        io::stdout().flush().unwrap();
+        io::stdout().flush()?;
 
         let mut cli_input = String::new();
 
@@ -1657,7 +1607,10 @@ fn main() -> io::Result<()> {
                             println!("Invalid argument");
                             continue;
                         }
-                        new_node = push_to_memory(Arc::clone(&new_node))?;
+                        println!("A");
+                        tx.send(1).unwrap();
+                        new_node = receiver.recv().unwrap();
+                        println!("B");
                     }
 
                     "get" => {
@@ -1740,12 +1693,13 @@ fn main() -> io::Result<()> {
                         println!("Unknown command: {}. Type 'help' for available commands.", args[0]);
                     }
                 }
+                
                 let metadata = fs::metadata("WAL.txt")?;
                 let size = metadata.len();
                 
                 if CHECKPOINT_COUNTER.load(Ordering::Relaxed) >= 100 && size >= 1024 {
                     println!("Maximum WAL file size exceeded.");
-                    new_node = push_to_memory(Arc::clone(&new_node))?;
+                    tx.send(1).unwrap();
                 }
             }
             Err(e) => {
@@ -1753,6 +1707,9 @@ fn main() -> io::Result<()> {
             }
         }
     }
+
+    t1.join().unwrap();
+
     Ok(())
 }
 
