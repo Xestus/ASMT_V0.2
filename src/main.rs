@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, Write};
 extern crate rand;
 
 use std::{env, fs, io};
-use std::sync::{mpsc, Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
+use std::sync::{mpsc, Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::rc::Rc;
@@ -23,11 +23,19 @@ static COUNTER: AtomicUsize = AtomicUsize::new(100);
 static CHECKPOINT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, PartialEq, Ord, PartialOrd, Eq, Hash)]
+struct Version {
+    value: String,
+    xmin: u32,
+    xmax: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Ord, PartialOrd, Eq, Hash)]
 struct Items {
     key: u32,
-    value: String,
     rank: u32,
+    version: Vec<Version>
 }
+
 #[derive(Debug, Clone)]
 struct Node {
     input: Vec<Items>,
@@ -77,25 +85,17 @@ impl Node {
 
     // Insert the K-V into the empty node.
     // Todo: Understand why i had to call every function 3 times for correct functioning.
-    fn insert(mut self_node: Arc<RwLock<Node>>, k: u32, v: String) -> io::Result<()> {
+    fn insert(mut self_node: Arc<RwLock<Node>>, k: u32, v: String, txn: u32) -> io::Result<()> {
         {
-            let z = self_node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
-            if !z.input.is_empty() {
-                match Node::temporary_duplicate_key_check(&z, k) {
-                    Some(result) => {
-                        println!("MEOW");
-                        return Ok(());
-                    }
-
-                    None => {
-
-                    }
-                }
+            let ver = Version {value: v.clone(), xmin: txn, xmax: None};
+            if Node::find_and_update_key_version(Arc::clone(&self_node), k, v.clone(), txn) == None {
+                println!("New version");
+                let version = vec!(ver.clone());
+                Node::add_new_keys(Arc::clone(&self_node), Items { key: k, rank: 1, version });
             }
         }
 
 
-        Node::add_new_keys(Arc::clone(&self_node), Items {key: k, value: v.clone(), rank: 1 } );
         self_node = Node::overflow_check(self_node);
         self_node = Node::min_size_check(self_node);
         self_node = Node::sort_main_nodes(self_node);
@@ -126,30 +126,42 @@ impl Node {
     /// # THIS IS A TEMPORARY HACK SOLUTION. IT'LL STAY THERE TILL I ADD AN ACTUAL THREAD SAFE FUNCTION.
     /// ## DO NOT TAKE THIS SERIOUSLY.
     /// ### :(
-    fn temporary_duplicate_key_check(node: &RwLockReadGuard<Node>, key: u32) -> Option<Items> {
-        for i in 0..node.input.len() {
-            if node.input[i].key == key {
-                return Some(node.input[i].clone());
+    fn find_and_update_key_version(node: Arc<RwLock<Node>>, key: u32, v: String, txn: u32) -> Option<()> {
+        let mut write_guard = {
+            let w1 = node.write();
+            w1.unwrap_or_else(|poisoned| poisoned.into_inner())
+        };
+        for i in 0..write_guard.input.len() {
+            if write_guard.input[i].key == key {
+                let ver_count = write_guard.input[i].version.len();
+                let ver = Version {value: v.clone(), xmin: txn, xmax: None};
+                write_guard.input[i].version[ver_count - 1].xmax = Option::from(txn);
+                write_guard.input[i].version.push(ver);
+                return Some(());
             }
         }
-
-        if !node.children.is_empty() {
-            if key < node.input[0].key {
-                let guard = node.children[0].read().unwrap_or_else(|poisoned| poisoned.into_inner());
-                return Node::temporary_duplicate_key_check(&guard, key);
-            } else if key > node.input[node.input.len()-1].key {
-                let guard = node.children.last().unwrap().read().unwrap_or_else(|poisoned| poisoned.into_inner());
-                return Node::temporary_duplicate_key_check(&guard, key);
+        drop(write_guard);
+        let read_guard = node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !read_guard.children.is_empty() {
+            println!("C");
+            if key < read_guard.input[0].key {
+                let guard = Arc::clone(&read_guard.children[0]);
+                drop(read_guard);
+                return Node::find_and_update_key_version(guard, key, v, txn);
+            } else if key > read_guard.input[read_guard.input.len()-1].key {
+                let guard = Arc::clone(&read_guard.children.last().unwrap());
+                drop(read_guard);
+                return Node::find_and_update_key_version(guard, key, v, txn);
             } else {
-                for i in 0..node.input.len() - 1 {
-                    if key > node.input[i].key && key < node.input[i+1].key {
-                        let guard = node.children[i+1].read().unwrap_or_else(|poisoned| poisoned.into_inner());
-                        return Node::temporary_duplicate_key_check(&guard, key);
+                for i in 0..read_guard.input.len() - 1 {
+                    if key > read_guard.input[i].key && key < read_guard.input[i+1].key {
+                        let guard = Arc::clone(&read_guard.children[i+1]);
+                        drop(read_guard);
+                        return Node::find_and_update_key_version(guard, key, v, txn);
                     }
                 }
             }
         }
-
         None
     }
     
@@ -775,7 +787,7 @@ impl Node {
     /// # TODO + WARNING:
     /// - THE SYSTEM CURRENTLY ISN'T CONCURRENT BUT IS CONCURRENCY IS THE NEXT FEATURE TO BE ADDED AFTER WRITE AHEAD LOGIN. PLEASE FORGIVE ME.
     /// - CASES WITH READER/WRITER COLLISION WILL BE HANDLED WITH REPLACEMENT OF MUTEX WITH RWLOCK, DEPENDING UPON NEED. 
-    fn key_position(node: Arc<RwLock<Node>>, key: u32) -> Option<String> {
+    fn key_position(node: Arc<RwLock<Node>>, key: u32) -> Option<Vec<Version>> {
         let mut stack = Vec::new();
         stack.push(node);
 
@@ -784,7 +796,7 @@ impl Node {
 
             for i in 0..current.input.len() {
                 if current.input[i].key == key {
-                    return Some(current.input[i].value.clone());
+                    return Some(current.input[i].version.clone());
                 }
             }
 
@@ -1065,11 +1077,26 @@ impl Node {
         writeln!(file, "[{:X}]", l).expect("panic message");
         for i in 0..l {
             write!(file, "[{}]", node_instance.input[i].key).expect("panic message");
-            let value_len = node_instance.input[i].value.len();
-            writeln!(file, "[{}]", value_len).expect("panic message");
-            let x : Vec<char> = node_instance.input[i].value.chars().collect();
-            write!(file, "{:?}", x).expect("panic message");
-            writeln!(file,"").expect("panic message");
+            let version_len = node_instance.input[i].version.len();
+            writeln!(file, "[{}]", version_len).expect("panic message");
+            for ver in &node_instance.input[i].version {
+                write!(file, "[{}]", ver.xmin).expect("panic message");
+                match ver.xmax {
+                    Some(xm) => {
+                        write!(file, "[{}]", xm).expect("panic message");
+                    }
+
+                    None => {
+                        write!(file, "[-1]").expect("panic message");
+                    }
+                }
+                let value_len = ver.value.len();
+                writeln!(file, "[{}]", value_len).expect("panic message");
+                let x : Vec<char> = ver.value.chars().collect();
+                write!(file, "{:?}", x).expect("panic message");
+                writeln!(file,"").expect("panic message");
+
+            }
         }
         writeln!(file,"[{:X}]", node_instance.children.len()).expect("panic message");
         if !node_instance.children.is_empty() {
@@ -1080,7 +1107,7 @@ impl Node {
         }
     }
 
-    fn deserialize(serialized_file_path: &str) -> io::Result<(Arc<RwLock<Node>>)> {
+/*    fn deserialize(serialized_file_path: &str) -> io::Result<(Arc<RwLock<Node>>)> {
         let file = File::open(serialized_file_path.clone())?;
         let metadata = fs::metadata(serialized_file_path)?;
         if metadata.len() == 0 {
@@ -1310,9 +1337,9 @@ impl Node {
 
         new_node
     }
-    
+*/
     fn crash_recovery(mut node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str) -> io::Result<(Arc<RwLock<Node>>)> {
-        let deserialize_result = Node::deserialize(serialized_file_path);
+/*        let deserialize_result = Node::deserialize(serialized_file_path);
         match deserialize_result {
             Ok(deserialized) => {
                 node = deserialized;
@@ -1321,7 +1348,7 @@ impl Node {
                 println!("{}", e);
             }
         }
-      
+*/
         let mut file = File::open(wal_file_path)?;
         let mut contents = String::new();
 
@@ -1344,7 +1371,7 @@ impl Node {
 
             if result.is_none() {
                 let s = Arc::clone(&node);
-                Node::insert(s, i[1].parse().unwrap(), i[2].clone()).expect("TODO: panic message");
+                Node::insert(s, i[1].parse().unwrap(), i[2].clone(), i[0].parse().unwrap()).expect("TODO: panic message");
             }
         }
         
@@ -1438,7 +1465,7 @@ impl Node {
         Ok(last_lsm)
     }
     
-    fn wal_immediate_read(node: Arc<RwLock<Node>>, k: u32, wal_file_path: &str) -> io::Result<Option<String>> {
+/*    fn wal_immediate_read(node: Arc<RwLock<Node>>, k: u32, wal_file_path: &str) -> io::Result<Option<String>> {
         let mut file = File::open(wal_file_path)?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
@@ -1452,20 +1479,20 @@ impl Node {
             }
             meow.push(k);
         }
-        
+
         for i in meow.iter() {
             let wal_key = i[1].parse::<u32>().unwrap();
-            
+
             if wal_key == k {
                 return Ok(Some(i[2].to_string()));
             }
         }
-        
+
         let result = Node::key_position(node,k);
-        
+
         Ok(result)
     }
-
+*/
     //TODO: Fix deleting.
     fn wal_immediate_delete(node: Arc<RwLock<Node>>, key: u32, wal_file_path: &str) -> io::Result<()> {
         let mut file = File::open(wal_file_path)?;
@@ -1524,183 +1551,203 @@ fn main() -> io::Result<()> {
     let serialized_file_path = "/home/_meringue/RustroverProjects/ASMT-V1/example.txt";
     let wal_file_path = "/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt";
     let mut new_node = Node::new();
-    match Node::deserialize(serialized_file_path) {
-        Ok(node) => {
-            new_node = node;
-        }
-        Err(e) => {
-            println!("{}", e);
-        }
-    }
-
-    let file = OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open("/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt")?;
-    let file = Arc::new(RwLock::new(file));
-    
-    println!("CLI!");
-    println!("Enter 'Help' for available commands & 'exit' to quit.");
-    
-    let cloned_node = Arc::clone(&new_node);
-    
-    let (tx, rx) = mpsc::channel();
-    let (sender, receiver) = mpsc::channel();
-    let t1 = thread::spawn(move || {
-        while let Ok(_) = rx.recv() {
-            match push_to_memory(Arc::clone(&cloned_node),serialized_file_path, wal_file_path) {
-                Ok(output_node) => {
-                    sender.send(output_node).unwrap();
-                }
-                Err(e) => {
-                    println!("{}", e);
-                }
-            }
-        }
-    });
 
 
-    loop {
-        print!(">  ");
-        io::stdout().flush()?;
+    Node::insert(Arc::clone(&new_node), 1, String::from("Woof"), 1);
+    Node::insert(Arc::clone(&new_node), 2, String::from("Woof"), 2);
+    Node::insert(Arc::clone(&new_node), 5, String::from("Woof"), 3);
+    Node::insert(Arc::clone(&new_node), 15, String::from("Woof"), 4);
+    Node::insert(Arc::clone(&new_node), 6, String::from("Woof"), 5);
+    Node::insert(Arc::clone(&new_node), 7, String::from("Woof"), 6);
+    Node::insert(Arc::clone(&new_node), 8, String::from("Woof"), 7);
+    Node::insert(Arc::clone(&new_node), 9, String::from("Woof"), 8);
+    Node::insert(Arc::clone(&new_node), 10, String::from("Woof"), 9);
+    Node::insert(Arc::clone(&new_node), 11, String::from("Woof"), 10);
+    Node::insert(Arc::clone(&new_node), 12, String::from("Woof"), 11);
+    Node::insert(Arc::clone(&new_node), 13, String::from("Woof"), 12);
+    Node::insert(Arc::clone(&new_node), 14, String::from("Woof"), 13);
+    Node::insert(Arc::clone(&new_node), 15, String::from("Quack"), 14);
+    Node::insert(Arc::clone(&new_node), 3, String::from("Woof"), 15);
+    Node::insert(Arc::clone(&new_node), 4, String::from("Woof"), 16);
 
-        let mut cli_input = String::new();
-
-        match io::stdin().read_line(&mut cli_input) {
-            Ok(_) => {
-                let cli_input = cli_input.trim();
-
-                if cli_input.is_empty() {
-                    continue;
-                }
-
-                let args = cli_input.split_whitespace().collect::<Vec<&str>>();
-
-                if args.is_empty() {
-                    continue;
-                }
-
-                match args[0].to_lowercase().as_str() {
-                    "insert" => {
-                        if args.len() != 3 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-
-                        let key = args[1].parse::<u32>().expect("Invalid argument");
-                        let value = args[2].parse::<String>().expect("Invalid argument");
-
-                        println!("Inserting key {}", key);
-                        Node::wal_updated(Arc::clone(&file), key, value, wal_file_path)?;
-                        CHECKPOINT_COUNTER.fetch_add(1, Ordering::Relaxed);
-                        println!("Inserted");
-                    }
-
-                    "push" => {
-                        if args.len() != 1 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-                        tx.send(1).unwrap();
-                        new_node = receiver.recv().unwrap();
-                    }
-
-                    "get" => {
-                        if args.len() != 2 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-
-                        let key = args[1].parse::<u32>().expect("Invalid argument");
-
-                        match Node::wal_immediate_read(Arc::clone(&new_node), key, wal_file_path) {
-                            Ok(Some(value)) => {
-                                println!("{}", value);
-                            }
-                            Ok(None) => {
-                                println!("No value found");
-                            }
-                            Err(e) => {
-                                println!("{}", e);
-                            }
-                        }
-                    }
-                    
-                    "delete" => {
-                        if args.len() != 2 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-                        
-                        let key = args[1].parse::<u32>().expect("Invalid argument");
-                        
-                        Node::wal_immediate_delete(Arc::clone(&new_node), key, wal_file_path)?;
-                    }
-
-                    "tree" => {
-                        if args.len() != 1 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-
-                        println!("{:?}", new_node.read().unwrap().print_tree());
-                    }
-
-                    "stats" => {
-                        if args.len() != 1 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-
-                        println!("{:?}", new_node.read().unwrap().print_stats());
-                    }
-
-                    "help" => {
-                        if args.len() != 1 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-
-                        println!("  insert <key> <value>  - Insert a key-value pair");
-                        println!("  push                  - Push inserted key-value to B-Tree");
-                        println!("  get <key>             - Get value for a key");
-                        println!("  delete <key>          - Delete a key (Broken Sorry)");
-                        println!("  tree                  - Show B-Tree in ASCII art form");
-                        println!("  stats                 - Show B-Tree Stats");
-                        println!("  help                  - Show this help");
-                        println!("  exit                  - Exit the program");
-                    }
-
-                    "exit" => {
-                        if args.len() != 1 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-
-                        println!("Exiting");
-                        break;
-                    }
-
-                    _ => {
-                        println!("Unknown command: {}. Type 'help' for available commands.", args[0]);
-                    }
-                }
-                
-                let metadata = fs::metadata(wal_file_path)?;
-                let size = metadata.len();
-                
-                if CHECKPOINT_COUNTER.load(Ordering::Relaxed) >= 100 && size >= 1024 {
-                    println!("Maximum WAL file size exceeded.");
-                    tx.send(1).unwrap();
-                }
+    println!("{:?}", new_node.read().unwrap().print_tree());
+    /*    match Node::deserialize(serialized_file_path) {
+            Ok(node) => {
+                new_node = node;
             }
             Err(e) => {
-                println!("Invalid argument. Error: {:?}",e );;
+                println!("{}", e);
             }
         }
-    }
 
-    t1.join().unwrap();
+        let file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open("/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt")?;
+        let file = Arc::new(RwLock::new(file));
+
+        println!("CLI!");
+        println!("Enter 'Help' for available commands & 'exit' to quit.");
+
+        let cloned_node = Arc::clone(&new_node);
+
+        let (tx, rx) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel();
+        let t1 = thread::spawn(move || {
+            while let Ok(_) = rx.recv() {
+                match push_to_memory(Arc::clone(&cloned_node),serialized_file_path, wal_file_path) {
+                    Ok(output_node) => {
+                        sender.send(output_node).unwrap();
+                    }
+                    Err(e) => {
+                        println!("{}", e);
+                    }
+                }
+            }
+        });
+
+
+        loop {
+            print!(">  ");
+            io::stdout().flush()?;
+
+            let mut cli_input = String::new();
+
+            match io::stdin().read_line(&mut cli_input) {
+                Ok(_) => {
+                    let cli_input = cli_input.trim();
+
+                    if cli_input.is_empty() {
+                        continue;
+                    }
+
+                    let args = cli_input.split_whitespace().collect::<Vec<&str>>();
+
+                    if args.is_empty() {
+                        continue;
+                    }
+
+                    match args[0].to_lowercase().as_str() {
+                        "insert" => {
+                            if args.len() != 3 {
+                                println!("Invalid argument");
+                                continue;
+                            }
+
+                            let key = args[1].parse::<u32>().expect("Invalid argument");
+                            let value = args[2].parse::<String>().expect("Invalid argument");
+
+                            println!("Inserting key {}", key);
+                            Node::wal_updated(Arc::clone(&file), key, value, wal_file_path)?;
+                            CHECKPOINT_COUNTER.fetch_add(1, Ordering::Relaxed);
+                            println!("Inserted");
+                        }
+
+                        "push" => {
+                            if args.len() != 1 {
+                                println!("Invalid argument");
+                                continue;
+                            }
+                            tx.send(1).unwrap();
+                            new_node = receiver.recv().unwrap();
+                        }
+
+                        "get" => {
+                            if args.len() != 2 {
+                                println!("Invalid argument");
+                                continue;
+                            }
+
+                            let key = args[1].parse::<u32>().expect("Invalid argument");
+
+                            match Node::wal_immediate_read(Arc::clone(&new_node), key, wal_file_path) {
+                                Ok(Some(value)) => {
+                                    println!("{}", value);
+                                }
+                                Ok(None) => {
+                                    println!("No value found");
+                                }
+                                Err(e) => {
+                                    println!("{}", e);
+                                }
+                            }
+                        }
+
+                        "delete" => {
+                            if args.len() != 2 {
+                                println!("Invalid argument");
+                                continue;
+                            }
+
+                            let key = args[1].parse::<u32>().expect("Invalid argument");
+
+                            Node::wal_immediate_delete(Arc::clone(&new_node), key, wal_file_path)?;
+                        }
+
+                        "tree" => {
+                            if args.len() != 1 {
+                                println!("Invalid argument");
+                                continue;
+                            }
+
+                            println!("{:?}", new_node.read().unwrap().print_tree());
+                        }
+
+                        "stats" => {
+                            if args.len() != 1 {
+                                println!("Invalid argument");
+                                continue;
+                            }
+
+                            println!("{:?}", new_node.read().unwrap().print_stats());
+                        }
+
+                        "help" => {
+                            if args.len() != 1 {
+                                println!("Invalid argument");
+                                continue;
+                            }
+
+                            println!("  insert <key> <value>  - Insert a key-value pair");
+                            println!("  push                  - Push inserted key-value to B-Tree");
+                            println!("  get <key>             - Get value for a key");
+                            println!("  delete <key>          - Delete a key (Broken Sorry)");
+                            println!("  tree                  - Show B-Tree in ASCII art form");
+                            println!("  stats                 - Show B-Tree Stats");
+                            println!("  help                  - Show this help");
+                            println!("  exit                  - Exit the program");
+                        }
+
+                        "exit" => {
+                            if args.len() != 1 {
+                                println!("Invalid argument");
+                                continue;
+                            }
+
+                            println!("Exiting");
+                            break;
+                        }
+
+                        _ => {
+                            println!("Unknown command: {}. Type 'help' for available commands.", args[0]);
+                        }
+                    }
+
+                    let metadata = fs::metadata(wal_file_path)?;
+                    let size = metadata.len();
+
+                    if CHECKPOINT_COUNTER.load(Ordering::Relaxed) >= 100 && size >= 1024 {
+                        println!("Maximum WAL file size exceeded.");
+                        tx.send(1).unwrap();
+                    }
+                }
+                Err(e) => {
+                    println!("Invalid argument. Error: {:?}",e );;
+                }
+            }
+        }
+
+        t1.join().unwrap();*/
 
     Ok(())
 }
@@ -1717,12 +1764,16 @@ fn push_to_memory(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_
 impl Node {
     /// Pretty print the entire tree starting from this node
     pub fn print_tree(&self) {
-        self.print_tree_recursive("", true, 0);
+        self.print_tree_recursive("", true, 0, None);
     }
 
+    /// Pretty print the tree with transaction visibility
+    pub fn print_tree_for_transaction(&self, tx_id: u32) {
+        self.print_tree_recursive("", true, 0, Some(tx_id));
+    }
 
     /// Recursive helper for tree printing
-    fn print_tree_recursive(&self, prefix: &str, is_last: bool, depth: usize) {
+    fn print_tree_recursive(&self, prefix: &str, is_last: bool, depth: usize, tx_id: Option<u32>) {
         // Print current node
         let connector = if depth == 0 {
             "Root"
@@ -1736,7 +1787,7 @@ impl Node {
                  prefix,
                  connector,
                  self.rank,
-                 self.format_items());
+                 self.format_items(tx_id));
 
         // Prepare prefix for children
         let child_prefix = if depth == 0 {
@@ -1751,10 +1802,10 @@ impl Node {
 
             match child_arc.read() {
                 Ok(child) => {
-                    child.print_tree_recursive(&child_prefix, is_last_child, depth + 1);
+                    child.print_tree_recursive(&child_prefix, is_last_child, depth + 1, tx_id);
                 }
                 Err(_) => {
-                    println!("{}{}[POISONED MUTEX]",
+                    println!("{}{}[POISONED RWLOCK]",
                              child_prefix,
                              if is_last_child { "└── " } else { "├── " });
                 }
@@ -1762,32 +1813,91 @@ impl Node {
         }
     }
 
-    fn format_items(&self) -> String {
+    fn format_items(&self, tx_id: Option<u32>) -> String {
         if self.input.is_empty() {
             return "empty".to_string();
         }
 
         let items: Vec<String> = self.input
             .iter()
-            .map(|item| format!("{}:{} ({})", item.key, item.value, item.rank))
+            .map(|item| {
+                let visible_versions = if let Some(tx) = tx_id {
+                    self.format_visible_versions(&item.version, tx)
+                } else {
+                    self.format_all_versions(&item.version)
+                };
+
+                format!("{}:{} (rank: {})", item.key, visible_versions, item.rank)
+            })
             .collect();
 
         items.join(", ")
     }
 
-    /// Alternative compact horizontal view
-    pub fn print_compact(&self) {
-        println!("B-Tree Structure:");
-        println!("{}", "=".repeat(50));
-        self.print_compact_recursive(0);
+    fn format_all_versions(&self, versions: &[Version]) -> String {
+        if versions.is_empty() {
+            return "[]".to_string();
+        }
+
+        let version_strs: Vec<String> = versions
+            .iter()
+            .map(|v| {
+                let xmax_str = match v.xmax {
+                    Some(xmax) => format!("{}", xmax),
+                    None => "∞".to_string(),
+                };
+                format!("{}[{}-{}]", v.value, v.xmin, xmax_str)
+            })
+            .collect();
+
+        format!("[{}]", version_strs.join(", "))
     }
 
-    fn print_compact_recursive(&self, level: usize) {
+    fn format_visible_versions(&self, versions: &[Version], tx_id: u32) -> String {
+        let visible_versions: Vec<&Version> = versions
+            .iter()
+            .filter(|v| self.is_version_visible(v, tx_id))
+            .collect();
+
+        if visible_versions.is_empty() {
+            return "[DELETED]".to_string();
+        }
+
+        // Get the most recent visible version
+        let latest_version = visible_versions
+            .iter()
+            .max_by_key(|v| v.xmin)
+            .unwrap();
+
+        format!("{}", latest_version.value)
+    }
+
+    fn is_version_visible(&self, version: &Version, tx_id: u32) -> bool {
+        // Version is visible if:
+        // 1. It was created before or by this transaction (xmin <= tx_id)
+        // 2. It wasn't deleted, or was deleted after this transaction (xmax is None or xmax > tx_id)
+        version.xmin <= tx_id && version.xmax.map_or(true, |xmax| xmax > tx_id)
+    }
+
+    /// Alternative compact horizontal view
+    pub fn print_compact(&self) {
+        self.print_compact_for_transaction(None);
+    }
+
+    /// Compact view for specific transaction
+    pub fn print_compact_for_transaction(&self, tx_id: Option<u32>) {
+        println!("B-Tree Structure{}:",
+                 tx_id.map(|tx| format!(" (TX: {})", tx)).unwrap_or_default());
+        println!("{}", "=".repeat(50));
+        self.print_compact_recursive(0, tx_id);
+    }
+
+    fn print_compact_recursive(&self, level: usize, tx_id: Option<u32>) {
         let indent = "  ".repeat(level);
         println!("{}Level {}: [{}] (rank: {})",
                  indent,
                  level,
-                 self.format_items(),
+                 self.format_items(tx_id),
                  self.rank);
 
         for (i, child_arc) in self.children.iter().enumerate() {
@@ -1796,10 +1906,10 @@ impl Node {
                     if i == 0 && !self.children.is_empty() {
                         println!("{}Children:", "  ".repeat(level + 1));
                     }
-                    child.print_compact_recursive(level + 1);
+                    child.print_compact_recursive(level + 1, tx_id);
                 }
                 Err(_) => {
-                    println!("{}[POISONED MUTEX]", "  ".repeat(level + 1));
+                    println!("{}[POISONED RWLOCK]", "  ".repeat(level + 1));
                 }
             }
         }
@@ -1807,25 +1917,49 @@ impl Node {
 
     /// Tree statistics
     pub fn print_stats(&self) {
-        let stats = self.calculate_stats();
-        println!("Tree Statistics:");
+        self.print_stats_for_transaction(None);
+    }
+
+    /// Tree statistics for specific transaction
+    pub fn print_stats_for_transaction(&self, tx_id: Option<u32>) {
+        let stats = self.calculate_stats(tx_id);
+        println!("Tree Statistics{}:",
+                 tx_id.map(|tx| format!(" (TX: {})", tx)).unwrap_or_default());
         println!("├── Total nodes: {}", stats.total_nodes);
         println!("├── Tree height: {}", stats.height);
         println!("├── Total keys: {}", stats.total_keys);
+        println!("├── Visible keys: {}", stats.visible_keys);
+        println!("├── Total versions: {}", stats.total_versions);
         println!("├── Leaf nodes: {}", stats.leaf_nodes);
         println!("└── Internal nodes: {}", stats.internal_nodes);
     }
 
-    fn calculate_stats(&self) -> TreeStats {
+    fn calculate_stats(&self, tx_id: Option<u32>) -> TreeStats {
         let mut stats = TreeStats::default();
-        self.calculate_stats_recursive(&mut stats, 0);
+        self.calculate_stats_recursive(&mut stats, 0, tx_id);
         stats
     }
 
-    fn calculate_stats_recursive(&self, stats: &mut TreeStats, depth: usize) {
+    fn calculate_stats_recursive(&self, stats: &mut TreeStats, depth: usize, tx_id: Option<u32>) {
         stats.total_nodes += 1;
         stats.total_keys += self.input.len();
         stats.height = stats.height.max(depth + 1);
+
+        // Count versions and visible keys
+        for item in &self.input {
+            stats.total_versions += item.version.len();
+
+            if let Some(tx) = tx_id {
+                let has_visible_version = item.version
+                    .iter()
+                    .any(|v| self.is_version_visible(v, tx));
+                if has_visible_version {
+                    stats.visible_keys += 1;
+                }
+            } else {
+                stats.visible_keys += 1; // All keys are "visible" when no tx specified
+            }
+        }
 
         if self.children.is_empty() {
             stats.leaf_nodes += 1;
@@ -1833,17 +1967,89 @@ impl Node {
             stats.internal_nodes += 1;
             for child_arc in &self.children {
                 if let Ok(child) = child_arc.read() {
-                    child.calculate_stats_recursive(stats, depth + 1);
+                    child.calculate_stats_recursive(stats, depth + 1, tx_id);
+                }
+            }
+        }
+    }
+
+    /// Print version history for debugging
+    pub fn print_version_history(&self) {
+        println!("Version History:");
+        println!("{}", "=".repeat(60));
+        self.print_version_history_recursive("", true, 0);
+    }
+
+    fn print_version_history_recursive(&self, prefix: &str, is_last: bool, depth: usize) {
+        let connector = if depth == 0 {
+            "Root"
+        } else if is_last {
+            "└── "
+        } else {
+            "├── "
+        };
+
+        println!("{}{}Node(rank: {})", prefix, connector, self.rank);
+
+        let child_prefix = if depth == 0 {
+            String::new()
+        } else {
+            format!("{}{}", prefix, if is_last { "    " } else { "│   " })
+        };
+
+        // Print detailed version info for each item
+        for (i, item) in self.input.iter().enumerate() {
+            let item_connector = if i == self.input.len() - 1 && self.children.is_empty() {
+                "└── "
+            } else {
+                "├── "
+            };
+
+            println!("{}{}Key {}: (rank: {})", child_prefix, item_connector, item.key, item.rank);
+
+            for (v_idx, version) in item.version.iter().enumerate() {
+                let version_connector = if v_idx == item.version.len() - 1 {
+                    "    └── "
+                } else {
+                    "    ├── "
+                };
+
+                let xmax_str = match version.xmax {
+                    Some(xmax) => format!("{}", xmax),
+                    None => "∞".to_string(),
+                };
+
+                println!("{}{}\"{}\" [TX {}-{}]",
+                         child_prefix, version_connector,
+                         version.value, version.xmin, xmax_str);
+            }
+        }
+
+        // Print children
+        for (i, child_arc) in self.children.iter().enumerate() {
+            let is_last_child = i == self.children.len() - 1;
+
+            match child_arc.read() {
+                Ok(child) => {
+                    child.print_version_history_recursive(&child_prefix, is_last_child, depth + 1);
+                }
+                Err(_) => {
+                    println!("{}{}[POISONED RWLOCK]",
+                             child_prefix,
+                             if is_last_child { "└── " } else { "├── " });
                 }
             }
         }
     }
 }
+
 #[derive(Default)]
 struct TreeStats {
     total_nodes: usize,
     height: usize,
     total_keys: usize,
+    visible_keys: usize,
+    total_versions: usize,
     leaf_nodes: usize,
     internal_nodes: usize,
 }
