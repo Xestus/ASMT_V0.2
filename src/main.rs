@@ -44,8 +44,8 @@ struct Node {
 }
 
 #[derive(Debug)]
-enum U32OrString {
-    Num(u32),
+enum I32OrString {
+    Num(i32),
     Str(String),
 }
 
@@ -1087,7 +1087,7 @@ impl Node {
                     }
 
                     None => {
-                        write!(file, "[-1]").expect("panic message");
+                        write!(file, "[-]").expect("panic message");
                     }
                 }
                 let value_len = ver.value.len();
@@ -1107,7 +1107,7 @@ impl Node {
         }
     }
 
-/*    fn deserialize(serialized_file_path: &str) -> io::Result<(Arc<RwLock<Node>>)> {
+    fn deserialize(serialized_file_path: &str) -> io::Result<(Arc<RwLock<Node>>)> { 
         let file = File::open(serialized_file_path.clone())?;
         let metadata = fs::metadata(serialized_file_path)?;
         if metadata.len() == 0 {
@@ -1119,9 +1119,10 @@ impl Node {
 
         let single_bracket = Regex::new(r"^\[[^\]]+\]$").unwrap();
         let double_bracket = Regex::new(r"^\[[^\]]+\]\[[^\]]+\]$").unwrap();
+        let triple_bracket = Regex::new(r"^\[[^\]]+\]\[[^\]]+\]\[[^\]]+\]$").unwrap();
         let array_pattern = Regex::new(r"^\[('[^']*'(,\s*'[^']*')*)\]$").unwrap();
 
-        let mut vec: Vec<U32OrString> = Vec::new();
+        let mut vec: Vec<I32OrString> = Vec::new();
 
         for contents in read.lines() {
             let x = contents?;
@@ -1134,10 +1135,10 @@ impl Node {
                     .map(|char_str| char_str.trim_matches('\'').chars().next().unwrap())
                     .collect();
 
-                vec.push(U32OrString::Str(result));
+                vec.push(I32OrString::Str(result));
             }
 
-            else if single_bracket.is_match(k) || double_bracket.is_match(k) {
+            else if single_bracket.is_match(k) || double_bracket.is_match(k) || triple_bracket.is_match(k) {
                 let chars: Vec<char> = k.chars().collect();
                 let mut numbers = Vec::new();
                 let mut current_num = String::new();
@@ -1148,12 +1149,17 @@ impl Node {
                         '[' => inside_brackets = true,
                         ']' => {
                             if inside_brackets && !current_num.is_empty() {
-                                numbers.push(current_num.parse::<u32>().expect("Error parsing number"));
+                                if current_num == "-" {
+                                    println!("A");
+                                    numbers.push(-1);
+                                } else {
+                                    numbers.push(current_num.parse::<i32>().expect("Error parsing number"));
+                                }
                                 current_num.clear();
                             }
                             inside_brackets = false;
                         }
-                        digit if digit.is_ascii_digit() && inside_brackets => {
+                        digit if digit.is_ascii_digit() && inside_brackets || inside_brackets && digit == '-' => {
                             current_num.push(digit);
                         }
                         _ => {}
@@ -1161,15 +1167,21 @@ impl Node {
                 }
 
                 if numbers.len() == 2 {
-                    vec.push(U32OrString::Num(numbers[0]));
-                    vec.push(U32OrString::Num(numbers[1]));
+                    vec.push(I32OrString::Num(numbers[0]));
+                    vec.push(I32OrString::Num(numbers[1]));
                 } else if numbers.len() == 1 {
-                    vec.push(U32OrString::Num(numbers[0]));
+                    vec.push(I32OrString::Num(numbers[0]));
+                } else if numbers.len() == 3 {
+                    vec.push(I32OrString::Num(numbers[0]));
+                    vec.push(I32OrString::Num(numbers[1]));
+                    vec.push(I32OrString::Num(numbers[2]));
                 }
             }
         }
+        
+        println!("{:?}", vec);
 
-        let vector_len = vec.len();
+/*        let vector_len = vec.len();
         let mut count = 0;
         let mut internal_count = 0;
         let mut vec_items: Vec<Items> = Vec::new();
@@ -1248,8 +1260,9 @@ impl Node {
         k = Node::deserialized_duplicate_data_check(k);
 
         let k = Arc::new(RwLock::new(k));
-
         Ok(k)
+*/
+        Ok(Node::new())
     }
 
     fn deserialized_with_relation(required_node: DeserializedNode, node_vec:&mut  Vec<DeserializedNode>) -> UltraDeserialized {
@@ -1337,7 +1350,7 @@ impl Node {
 
         new_node
     }
-*/
+
     fn crash_recovery(mut node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str) -> io::Result<(Arc<RwLock<Node>>)> {
 /*        let deserialize_result = Node::deserialize(serialized_file_path);
         match deserialize_result {
@@ -1558,19 +1571,14 @@ fn main() -> io::Result<()> {
     Node::insert(Arc::clone(&new_node), 5, String::from("Woof"), 3);
     Node::insert(Arc::clone(&new_node), 15, String::from("Woof"), 4);
     Node::insert(Arc::clone(&new_node), 6, String::from("Woof"), 5);
-    Node::insert(Arc::clone(&new_node), 7, String::from("Woof"), 6);
-    Node::insert(Arc::clone(&new_node), 8, String::from("Woof"), 7);
-    Node::insert(Arc::clone(&new_node), 9, String::from("Woof"), 8);
-    Node::insert(Arc::clone(&new_node), 10, String::from("Woof"), 9);
-    Node::insert(Arc::clone(&new_node), 11, String::from("Woof"), 10);
-    Node::insert(Arc::clone(&new_node), 12, String::from("Woof"), 11);
-    Node::insert(Arc::clone(&new_node), 13, String::from("Woof"), 12);
-    Node::insert(Arc::clone(&new_node), 14, String::from("Woof"), 13);
+    Node::insert(Arc::clone(&new_node), 2, String::from("Neigh"), 6);
+    Node::insert(Arc::clone(&new_node), 5, String::from("KawKaw"), 7);
     Node::insert(Arc::clone(&new_node), 15, String::from("Quack"), 14);
-    Node::insert(Arc::clone(&new_node), 3, String::from("Woof"), 15);
-    Node::insert(Arc::clone(&new_node), 4, String::from("Woof"), 16);
 
     println!("{:?}", new_node.read().unwrap().print_tree());
+    
+    Node::serialize(new_node);
+    Node::deserialize(serialized_file_path);
     /*    match Node::deserialize(serialized_file_path) {
             Ok(node) => {
                 new_node = node;
