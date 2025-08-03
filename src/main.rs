@@ -1107,7 +1107,7 @@ impl Node {
         }
     }
 
-    fn deserialize(serialized_file_path: &str) -> io::Result<(Arc<RwLock<Node>>)> { 
+    fn deserialize(serialized_file_path: &str) -> io::Result<(Arc<RwLock<Node>>)> {
         let file = File::open(serialized_file_path.clone())?;
         let metadata = fs::metadata(serialized_file_path)?;
         if metadata.len() == 0 {
@@ -1178,91 +1178,87 @@ impl Node {
                 }
             }
         }
-        
-        println!("{:?}", vec);
 
-/*        let vector_len = vec.len();
+        for item in vec.iter() {
+            println!("{:?}", item);
+        }
+        let vector_len = vec.len();
         let mut count = 0;
-        let mut internal_count = 0;
-        let mut vec_items: Vec<Items> = Vec::new();
-        let mut node_vec: Vec<DeserializedNode> = Vec::new();
-        let mut no_of_keys_helper_counter = 0;
-        let mut first_time_hit_item_push = true;
-        let mut rank_for_keys = 0;
-        let mut push_count = 0;
-        for _i in 0..vector_len {
-            let mut no_of_keys =0;
-            count = count + 1;
-
-
-            if count > 3 {
-                if let U32OrString::Num(value) = &vec[no_of_keys_helper_counter + 2] {
-                    no_of_keys = *value;
+        let mut no_of_keys_in_node = 0;
+        let mut keys = 0;
+        let mut version_of_single_key = 0;
+        let mut dec_count_for_versions = -1;
+        let mut to_set_version = false;
+        let mut version_of_all_keys_in_same_node = 0;
+        let mut xmin_vec: Vec<i32> = Vec::new();
+        let mut xmax_vec: Vec<i32> = Vec::new();
+        let mut values_vec: Vec<String> = Vec::new();
+        let mut no_of_children = 0;
+        let mut node_rank = 0;
+        let mut vector_deserialized_items = Vec::new();
+        let mut vector_deserialized = Vec::new();
+        
+        // Initial root done. Upto 19.
+        for i in 0..vector_len {
+            count += 1;
+            
+            if count == 3 + 5 * version_of_all_keys_in_same_node + no_of_keys_in_node {
+                no_of_children = vec[i].to_i32().unwrap();
+                vector_deserialized.push(DeserializedNode{ child_count: no_of_children as u32, items: vector_deserialized_items.clone()});
+                count = 1;
+            }
+            
+            if to_set_version {
+                version_of_single_key = vec[i].to_i32().unwrap();
+                dec_count_for_versions = 4 * version_of_single_key + 1;
+                version_of_all_keys_in_same_node += version_of_single_key;
+                to_set_version = false;
+            }
+            
+            if dec_count_for_versions == 0 {
+                keys = vec[i].to_i32().unwrap();
+                to_set_version = true;
+                dec_count_for_versions = -1;
+            }
+            
+            if dec_count_for_versions > 0 && dec_count_for_versions <= 4 * version_of_single_key {
+                if dec_count_for_versions % 4 == 0 {
+                    xmin_vec.push(vec[i].to_i32().unwrap());
+                } else if dec_count_for_versions + 1 % 4 == 0 {
+                    xmax_vec.push(vec[i].to_i32().unwrap());
+                } else if dec_count_for_versions + 3 % 4 == 0 {
+                    values_vec.push(vec[i].to_string().unwrap());
+                }
+                
+                dec_count_for_versions -= 1;
+            } else if dec_count_for_versions > 0 {
+                dec_count_for_versions -= 1;
+            } else if dec_count_for_versions == 0 {
+                let mut ver_vec:Vec<Version> = Vec::new();
+                for _j in 0..xmin_vec.len() {
+                    ver_vec.push(Version {value: values_vec[i].clone(), xmin: xmin_vec[i] as u32, xmax: Some(xmax_vec[i] as u32)});
                 }
 
-                internal_count = internal_count + 1;
-                if (no_of_keys * 3 + 4) as usize == count && count > (no_of_keys * 3) as usize{
-                    let mut k = 0;
-                    if let U32OrString::Num(value) = &vec[count -1] {
-                        k = *value;
-                    }
-                }
+                vector_deserialized_items.push(Items {key: keys as u32, rank: node_rank as u32, version: ver_vec });
             }
 
-            if internal_count == (no_of_keys * 3 + 1) as usize {
-                let mut probable_child_count = 0;
-                if let U32OrString::Num(value) = &vec[count -1] {
-                    probable_child_count = *value;
-                }
-                if no_of_keys == push_count && !vec_items.is_empty() {
-                    node_vec.push(DeserializedNode { items:vec_items.clone(), child_count: probable_child_count });
-                    push_count = 0;
-                }
-
+            if count  == 3 {
+                no_of_keys_in_node = vec[i].to_i32().unwrap();
+                node_rank = vec[i-1].to_i32().unwrap();
+                dec_count_for_versions = 0;
             }
-
-            if internal_count >= (no_of_keys * 3 + 3) as usize {
-                vec_items.clear();
-                no_of_keys_helper_counter = no_of_keys_helper_counter + (no_of_keys * 3 + 3) as usize;
-                internal_count = 0;
-                first_time_hit_item_push = true;
-            }
-            if internal_count % 3 == 0 && internal_count >= 3 {
-                let mut k = 0;
-                let mut l = String::new();
-
-                if first_time_hit_item_push {
-                    if let U32OrString::Num(value) = &vec[count - 5] {
-                        rank_for_keys = *value;
-                    }
-                    first_time_hit_item_push = false;
-                }
-
-                if let U32OrString::Num(value) = &vec[count - 3] {
-                    k = *value;
-
-                }
-
-                if let U32OrString::Str(value) = &vec[count - 1] {
-                    l = value.clone();
-                }
-
-                vec_items.push(Items{key:k, value: l, rank: rank_for_keys });
-                push_count += 1;
-            }
-
         }
 
-        let required_node = node_vec[0].clone();
-        let x = Node::deserialized_with_relation(required_node, &mut node_vec);
+        let required_node = vector_deserialized[0].clone();
+        let x = Node::deserialized_with_relation(required_node, &mut vector_deserialized);
 
         let mut k = Node::deserialized_data_to_nodes(x);
         k = Node::deserialized_duplicate_data_check(k);
 
         let k = Arc::new(RwLock::new(k));
+        println!("{:?}", k.read().unwrap().print_tree());
         Ok(k)
-*/
-        Ok(Node::new())
+        
     }
 
     fn deserialized_with_relation(required_node: DeserializedNode, node_vec:&mut  Vec<DeserializedNode>) -> UltraDeserialized {
@@ -1537,6 +1533,22 @@ impl Node {
     }
 }
 
+impl I32OrString {
+    fn to_i32(&self) -> Option<i32> {
+        match self {
+            I32OrString::Num(num) => Some(*num),
+            I32OrString::Str(_) => None,
+        }
+    }
+    
+    fn to_string(&self) -> Option<String> {
+        match self {
+            I32OrString::Num(_) => None,
+            I32OrString::Str(str) => Some(str.to_string()),
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "WAT")]
 #[command(about = "WATERMELON")]
@@ -1573,7 +1585,10 @@ fn main() -> io::Result<()> {
     Node::insert(Arc::clone(&new_node), 6, String::from("Woof"), 5);
     Node::insert(Arc::clone(&new_node), 2, String::from("Neigh"), 6);
     Node::insert(Arc::clone(&new_node), 5, String::from("KawKaw"), 7);
-    Node::insert(Arc::clone(&new_node), 15, String::from("Quack"), 14);
+    Node::insert(Arc::clone(&new_node), 15, String::from("Quack"), 8);
+    Node::insert(Arc::clone(&new_node), 7, String::from("Meow"), 9);
+    Node::insert(Arc::clone(&new_node), 8, String::from("Meow"), 10);
+    Node::insert(Arc::clone(&new_node), 9, String::from("Meow"), 11);
 
     println!("{:?}", new_node.read().unwrap().print_tree());
     
