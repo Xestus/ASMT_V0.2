@@ -1191,7 +1191,7 @@ impl Node {
         let mut to_set_version = false;
         let mut version_of_all_keys_in_same_node = 0;
         let mut xmin_vec: Vec<i32> = Vec::new();
-        let mut xmax_vec: Vec<i32> = Vec::new();
+        let mut xmax_vec: Vec<Option<u32>> = Vec::new();
         let mut values_vec: Vec<String> = Vec::new();
         let mut no_of_children = 0;
         let mut node_rank = 0;
@@ -1207,23 +1207,21 @@ impl Node {
             if internal_count_activate {
                 internal_count = count;
             }
-            
 
-            println!("------------------------------------------------");
-            println!("{:?} \n count: {} \n no_of_keys_in_node: {} \n no_of_version_of_all_keys_in_same_node: {}", vec[i], count, no_of_keys_in_node, version_of_all_keys_in_same_node);
-            println!(" dec_count_for_versions: {:?}", dec_count_for_versions);
-            println!("version_of_single_key: {:?}", version_of_single_key);
-            println!("number_of_keys_inspected: {:?}", number_of_keys_inspected);
-            println!("--------------------------------------------------");
+            // println!("------------------------------------------------");
+            // println!("{:?} \n count: {} \n no_of_keys_in_node: {} \n no_of_version_of_all_keys_in_same_node: {}", vec[i], count, no_of_keys_in_node, version_of_all_keys_in_same_node);
+            // println!(" dec_count_for_versions: {:?}", dec_count_for_versions);
+            // println!("version_of_single_key: {:?}", version_of_single_key);
+            // println!("number_of_keys_inspected: {:?}", number_of_keys_inspected);
+            // println!("--------------------------------------------------");
             if count == (3 + 5 * version_of_all_keys_in_same_node + no_of_keys_in_node + version_and_key_equal) && count != 3 && version_of_all_keys_in_same_node != version_of_single_key  && no_of_keys_in_node > 0 && number_of_keys_inspected == no_of_keys_in_node {
                 version_of_all_keys_in_same_node = 0;
                 version_of_single_key = 0;
                 no_of_keys_in_node = 0;
-                println!("{:?}", vec[i]);
                 no_of_children = vec[i].to_i32().unwrap();
                 vector_deserialized.push(DeserializedNode{ child_count: no_of_children as u32, items: vector_deserialized_items.clone()});
+                vector_deserialized_items.clear();
                 count = 1;
-                println!("A");
                 dec_count_for_versions = -1;
                 // internal_count_activate += 1;
                 number_of_keys_inspected = 0;
@@ -1237,13 +1235,12 @@ impl Node {
                 to_set_version = false;
                 number_of_keys_inspected += 1;
                 if number_of_keys_inspected == no_of_keys_in_node && version_of_all_keys_in_same_node == no_of_keys_in_node {
-                    println!("AAAAAAAAAAAAAAAAAAA");
                     version_and_key_equal += 1;
                 }
             }
             
             if dec_count_for_versions == 0 {
-                println!("Key {:?}, {}", vec[i], count);
+                // println!("Key {:?}, {}", vec[i], count);
                 keys = vec[i].to_i32().unwrap();
                 to_set_version = true;
                 dec_count_for_versions = -1;
@@ -1251,14 +1248,19 @@ impl Node {
             
             if dec_count_for_versions > 0 && dec_count_for_versions <= 4 * version_of_single_key {
                 if dec_count_for_versions % 4 == 0 {
-                    println!("XMIN {:?}", vec[i]);
+                    // println!("XMIN {:?}", vec[i]);
                     xmin_vec.push(vec[i].to_i32().unwrap());
                 } else if (dec_count_for_versions + 1) % 4 == 0 {
-                    xmax_vec.push(vec[i].to_i32().unwrap());
-                    println!("XMAX {:?}", vec[i]);
+                    let result = vec[i].to_i32().unwrap();
+                    if result == -1 {
+                        xmax_vec.push(None);
+                    } else {
+                        xmax_vec.push(Some(vec[i].to_i32().unwrap() as u32));
+                    }
+                    // println!("XMAX {:?}", vec[i]);
                 } else if (dec_count_for_versions + 3) % 4 == 0 {
                     values_vec.push(vec[i].to_string().unwrap());
-                    println!("VALUE {:?}", vec[i]);
+                    // println!("VALUE {:?}", vec[i]);
                 }
                 
                 dec_count_for_versions -= 1;
@@ -1269,29 +1271,30 @@ impl Node {
             if dec_count_for_versions == 0 {
                 let mut ver_vec:Vec<Version> = Vec::new();
                 for j in 0..xmin_vec.len() {
-                    ver_vec.push(Version {value: values_vec[j].clone(), xmin: xmin_vec[j] as u32, xmax: Some(xmax_vec[j] as u32)});
+                    ver_vec.push(Version {value: values_vec[j].clone(), xmin: xmin_vec[j] as u32, xmax: xmax_vec[j]});
                 }
                 values_vec.clear();
                 xmin_vec.clear();
                 xmax_vec.clear();
 
                 vector_deserialized_items.push(Items {key: keys as u32, rank: node_rank as u32, version: ver_vec.clone() });
-
-                println!("===================================");
-                println!("vector_deserialized_items: {:?}", vector_deserialized_items);
-                println!("===================================");
-
+                println!("{:?}", vector_deserialized_items);
             }
 
-            if count  == 3 /*&& internal_count_activate == 1*/  {
-                println!("{:?} {:?}", vec[i], vec[i-1]);
+            if count  == 3  {
+                // println!("{:?} {:?}", vec[i], vec[i-1]);
                 no_of_keys_in_node = vec[i].to_i32().unwrap();
                 node_rank = vec[i-1].to_i32().unwrap();
 
                 dec_count_for_versions = 0;
             }
         }
-        println!("{:?}", vector_deserialized);
+        // println!("{:?}", vector_deserialized);
+
+        println!("===================================");
+        println!("vector_deserialized: {:#?}", vector_deserialized);
+        println!("===================================");
+
 
         let required_node = vector_deserialized[0].clone();
         let x = Node::deserialized_with_relation(required_node, &mut vector_deserialized);
@@ -1633,7 +1636,7 @@ fn main() -> io::Result<()> {
     Node::insert(Arc::clone(&new_node), 7, String::from("Meow"), 9);
     Node::insert(Arc::clone(&new_node), 8, String::from("Meow"), 10);
     Node::insert(Arc::clone(&new_node), 9, String::from("Meow"), 11);
-    Node::insert(Arc::clone(&new_node), 3, String::from("Meow"), 12);
+    // Node::insert(Arc::clone(&new_node), 3, String::from("Meow"), 12);
 
     println!("{:?}", new_node.read().unwrap().print_tree());
     
