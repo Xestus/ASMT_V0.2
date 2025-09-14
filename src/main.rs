@@ -143,7 +143,6 @@ impl Node {
         drop(write_guard);
         let read_guard = node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
         if !read_guard.children.is_empty() {
-            println!("C");
             if key < read_guard.input[0].key {
                 let guard = Arc::clone(&read_guard.children[0]);
                 drop(read_guard);
@@ -1112,6 +1111,8 @@ impl Node {
         let metadata = fs::metadata(serialized_file_path)?;
         if metadata.len() == 0 {
             return Ok(Node::new());
+        } else {
+            println!("{:?}", metadata );
         }
 
         let read = BufReader::new(file);
@@ -1150,7 +1151,6 @@ impl Node {
                         ']' => {
                             if inside_brackets && !current_num.is_empty() {
                                 if current_num == "-" {
-                                    println!("A");
                                     numbers.push(-1);
                                 } else {
                                     numbers.push(current_num.parse::<i32>().expect("Error parsing number"));
@@ -1278,7 +1278,7 @@ impl Node {
                 xmax_vec.clear();
 
                 vector_deserialized_items.push(Items {key: keys as u32, rank: node_rank as u32, version: ver_vec.clone() });
-                println!("{:?}", vector_deserialized_items);
+                // println!("{:?}", vector_deserialized_items);
             }
 
             if count  == 3  {
@@ -1292,7 +1292,7 @@ impl Node {
         // println!("{:?}", vector_deserialized);
 
         println!("===================================");
-        println!("vector_deserialized: {:#?}", vector_deserialized);
+        println!("vector_deserialized: {:#?} \n metadata length: {}", vector_deserialized, metadata.len());
         println!("===================================");
 
 
@@ -1303,7 +1303,7 @@ impl Node {
         k = Node::deserialized_duplicate_data_check(k);
 
         let k = Arc::new(RwLock::new(k));
-        println!("{:?}", k.read().unwrap().print_tree());
+        // println!("{:?}", k.read().unwrap().print_tree());
         Ok(k)
         
     }
@@ -1395,16 +1395,12 @@ impl Node {
     }
 
     fn crash_recovery(mut node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str) -> io::Result<(Arc<RwLock<Node>>)> {
-/*        let deserialize_result = Node::deserialize(serialized_file_path);
+        let deserialize_result = Node::deserialize(serialized_file_path);
         match deserialize_result {
-            Ok(deserialized) => {
-                node = deserialized;
-            }
-            Err(e) => {
-                println!("{}", e);
-            }
+            Ok(deserialized) => node = deserialized,
+            Err(e) => println!("{}", e),
         }
-*/
+
         let mut file = File::open(wal_file_path)?;
         let mut contents = String::new();
 
@@ -1431,7 +1427,7 @@ impl Node {
             }
         }
         
-        println!("{:?}", node.read().unwrap().print_tree());
+        // println!("{:?}", node.read().unwrap().print_tree());
         
         match Node::serialize(Arc::clone(&node)) {
             Ok(_) => {
@@ -1495,7 +1491,7 @@ impl Node {
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
 
-        println!("{:?}", contents);
+        // println!("{:?}", contents);
 
         if contents.is_empty() {
             return Ok(99)
@@ -1521,7 +1517,12 @@ impl Node {
         Ok(last_lsm)
     }
     
-/*    fn wal_immediate_read(node: Arc<RwLock<Node>>, k: u32, wal_file_path: &str) -> io::Result<Option<String>> {
+    fn wal_immediate_read(node: Arc<RwLock<Node>>, k: u32, wal_file_path: &str) -> io::Result<Option<Vec<Version>>> {
+        struct TemporaryLsmValue {
+            temp_value: String,
+            temp_lsm : u32
+        }
+        
         let mut file = File::open(wal_file_path)?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
@@ -1535,20 +1536,35 @@ impl Node {
             }
             meow.push(k);
         }
+        
+        let mut lsm_string_vec: Vec<TemporaryLsmValue> = Vec::new();
 
         for i in meow.iter() {
             let wal_key = i[1].parse::<u32>().unwrap();
 
             if wal_key == k {
-                return Ok(Some(i[2].to_string()));
+                lsm_string_vec.push(TemporaryLsmValue{temp_value: i[2].to_string(), temp_lsm: i[0].parse::<u32>().unwrap()});
             }
+        }
+        
+        let mut result_wal: Vec<Version> = Vec::new();
+        for i in 0..lsm_string_vec.len() {
+            if (i < lsm_string_vec.len()-1) {
+                result_wal.push(Version{value: lsm_string_vec[i].temp_value.clone(), xmin:lsm_string_vec[i].temp_lsm, xmax: Some(lsm_string_vec[i+1].temp_lsm) });
+            } else {
+                result_wal.push(Version{value: lsm_string_vec[i].temp_value.clone(), xmin:lsm_string_vec[i].temp_lsm, xmax: None });
+            }
+        }
+        
+        if result_wal.len() > 0 {
+            return Ok(Some(result_wal));
         }
 
         let result = Node::key_position(node,k);
 
         Ok(result)
     }
-*/
+
     //TODO: Fix deleting.
     fn wal_immediate_delete(node: Arc<RwLock<Node>>, key: u32, wal_file_path: &str) -> io::Result<()> {
         let mut file = File::open(wal_file_path)?;
@@ -1624,25 +1640,21 @@ fn main() -> io::Result<()> {
     let wal_file_path = "/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt";
     let mut new_node = Node::new();
 
-
-    Node::insert(Arc::clone(&new_node), 1, String::from("Woof"), 1);
+/*    Node::insert(Arc::clone(&new_node), 1, String::from("Woof"), 1);
     Node::insert(Arc::clone(&new_node), 2, String::from("Woof"), 2);
     Node::insert(Arc::clone(&new_node), 5, String::from("Woof"), 3);
     Node::insert(Arc::clone(&new_node), 15, String::from("Woof"), 4);
-    Node::insert(Arc::clone(&new_node), 6, String::from("Woof"), 5);
     Node::insert(Arc::clone(&new_node), 2, String::from("Neigh"), 6);
     Node::insert(Arc::clone(&new_node), 5, String::from("KawKaw"), 7);
     Node::insert(Arc::clone(&new_node), 15, String::from("Quack"), 8);
-    Node::insert(Arc::clone(&new_node), 7, String::from("Meow"), 9);
-    Node::insert(Arc::clone(&new_node), 8, String::from("Meow"), 10);
-    Node::insert(Arc::clone(&new_node), 9, String::from("Meow"), 11);
-    // Node::insert(Arc::clone(&new_node), 3, String::from("Meow"), 12);
+    Node::insert(Arc::clone(&new_node), 3, String::from("Meow"), 12);
 
     println!("{:?}", new_node.read().unwrap().print_tree());
     
-    Node::serialize(new_node);
+    Node::serialize(Arc::clone(&new_node));
     Node::deserialize(serialized_file_path);
-    /*    match Node::deserialize(serialized_file_path) {
+*/
+    match Node::deserialize(serialized_file_path) {
             Ok(node) => {
                 new_node = node;
             }
@@ -1733,7 +1745,9 @@ fn main() -> io::Result<()> {
 
                             match Node::wal_immediate_read(Arc::clone(&new_node), key, wal_file_path) {
                                 Ok(Some(value)) => {
-                                    println!("{}", value);
+                                    for i in value.iter() {
+                                        println!("Value: {:?} [{:?} - {:?}]", i.value, i.xmin, i.xmax.unwrap());
+                                    }
                                 }
                                 Ok(None) => {
                                     println!("No value found");
@@ -1752,7 +1766,7 @@ fn main() -> io::Result<()> {
 
                             let key = args[1].parse::<u32>().expect("Invalid argument");
 
-                            Node::wal_immediate_delete(Arc::clone(&new_node), key, wal_file_path)?;
+                            // Node::wal_immediate_delete(Arc::clone(&new_node), key, wal_file_path)?;
                         }
 
                         "tree" => {
@@ -1818,7 +1832,7 @@ fn main() -> io::Result<()> {
             }
         }
 
-        t1.join().unwrap();*/
+        t1.join().unwrap();
 
     Ok(())
 }
@@ -1829,7 +1843,6 @@ fn push_to_memory(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_
     CHECKPOINT_COUNTER.store(0, Ordering::Relaxed);
     println!("Pushed disk values");
     returned_node
-
 }
 
 impl Node {
