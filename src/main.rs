@@ -1394,7 +1394,7 @@ impl Node {
         new_node
     }
 
-    fn crash_recovery(mut node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str) -> io::Result<(Arc<RwLock<Node>>)> {
+    fn push_to_memory(mut node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str) -> io::Result<(Arc<RwLock<Node>>)> {
         let deserialize_result = Node::deserialize(serialized_file_path);
         match deserialize_result {
             Ok(deserialized) => node = deserialized,
@@ -1415,19 +1415,17 @@ impl Node {
             }
             meow.push(k);
         }
-        
+
         for i in meow.iter() {
             let k = i[1].parse::<u32>().unwrap();
             let z = Arc::clone(&node);
-            let result =  Node::key_position(z, k);
-
-            if result.is_none() {
+            println!("z: {:?}, k: {:?}", z, k);
                 let s = Arc::clone(&node);
                 Node::insert(s, i[1].parse().unwrap(), i[2].clone(), i[0].parse().unwrap()).expect("TODO: panic message");
-            }
+
         }
         
-        // println!("{:?}", node.read().unwrap().print_tree());
+        println!("{:?}", node.read().unwrap().print_tree());
         
         match Node::serialize(Arc::clone(&node)) {
             Ok(_) => {
@@ -1839,7 +1837,7 @@ fn main() -> io::Result<()> {
 
 fn push_to_memory(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str) -> io::Result<Arc<RwLock<Node>>> {
     println!("Pushing disk values to in-memory B-Tree");
-    let returned_node = Node::crash_recovery(node,serialized_file_path, wal_file_path);
+    let returned_node = Node::push_to_memory(node, serialized_file_path, wal_file_path);
     CHECKPOINT_COUNTER.store(0, Ordering::Relaxed);
     println!("Pushed disk values");
     returned_node
