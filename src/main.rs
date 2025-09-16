@@ -2,21 +2,21 @@ use std::cell::RefCell;
 use crate::rand::Rng;
 use std::io::{BufRead, BufReader, Write};
 extern crate rand;
-
+use std::fs::File;
 use std::{env, fs, io};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::rc::Rc;
 use regex::Regex;
-use std::fs::{File, OpenOptions};
+use std::fs:: OpenOptions;
 use std::io::{Read, Seek, SeekFrom};
 use std::mem::zeroed;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
 use clap::{Parser, Subcommand};
-use crate::ValVer::VersionVariant;
+use crate::ValVer::{ValueVariant, VersionVariant};
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
 static COUNTER: AtomicUsize = AtomicUsize::new(100);
@@ -1532,7 +1532,7 @@ impl Node {
         Ok(last_lsm)
     }
 
-    fn wal_immediate_read(node: Arc<RwLock<Node>>, k: u32, wal_file_path: &str, temp_val: Option<u32>) -> io::Result<Option<Vec<Version>>> {
+    fn wal_immediate_read(node: Arc<RwLock<Node>>, k: u32, wal_file_path: &str, ss_val: Option<u32>) -> io::Result<Option<ValVer>> {
         struct TemporaryLsmValue {
             temp_value: String,
             temp_lsm : u32
@@ -1571,13 +1571,40 @@ impl Node {
             }
         }
 
-        if result_wal.len() > 0 {
-            return Ok(Some(result_wal));
+
+        // HAck: Looks inefficient, redo it later
+        let mut result= result_wal;
+        match Node::key_position(node,k) {
+            Some(version) => {
+                result.extend(version);
+            }
+            None => {}
         }
+        
+        if let Some(val) = ss_val {
+            if result.is_empty() {
+                return Ok(None)
+            }
 
-        let result = Node::key_position(node,k);
-
-        Ok(result)
+            for i in 0..result.iter().len() {
+                let result_max = result[i].xmax;
+                
+                match result_max {
+                    Some(xmax) => {
+                        if (result[i].xmin < val && xmax > val) {
+                            return Ok(Some(ValueVariant(result[i].clone().value)));
+                        }
+                    }
+                    None => {
+                        if (result[i].xmin < val) {
+                            return Ok(Some(ValueVariant(result[i].clone().value)));
+                        }
+                    }
+                    
+                }
+            }
+        }
+        Ok(Some(VersionVariant(result)))
     }
 
     //TODO: Fix deleting.
@@ -1751,11 +1778,11 @@ fn main() -> io::Result<()> {
                     }
 
                     "get" => {
-                        let temp_val;
+                        let ss_val;
                         if args.len() == 2 {
-                            temp_val = None;
+                            ss_val = None;
                         } else if args.len() == 3 {
-                            temp_val = Some(args[2].parse::<u32>().expect("Invalid argument"));
+                            ss_val = Some(args[2].parse::<u32>().expect("Invalid argument"));
                         } else {
                             println!("Invalid argument");
                             continue;
@@ -1763,11 +1790,19 @@ fn main() -> io::Result<()> {
 
                         let key = args[1].parse::<u32>().expect("Invalid argument");
 
-                        match Node::wal_immediate_read(Arc::clone(&new_node), key, wal_file_path, temp_val) {
-                            Ok(Some(value)) => {
-                                for i in value.iter() {
-                                    println!("Value: {:?} [{:?} - {:?}]", i.value, i.xmin, i.xmax);
+                        match Node::wal_immediate_read(Arc::clone(&new_node), key, wal_file_path, ss_val) {
+                            Ok(Some(val_ver)) => {
+                                match val_ver {
+                                    VersionVariant(version) => {
+                                        for i in version.iter() {
+                                            println!("Value: {:?} [{:?} - {:?}]", i.value, i.xmin, i.xmax);
+                                        }
+                                    }
+                                    ValueVariant(value) => {
+                                        println!("Value: {:?}", value);
+                                    }
                                 }
+
                             }
                             Ok(None) => {
                                 println!("No value found");
