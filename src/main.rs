@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, Write};
 extern crate rand;
 use std::fs::File;
 use std::{env, fs, io};
+use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use once_cell::sync::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -47,6 +48,13 @@ struct Node {
     input: Vec<Items>,
     rank: u32,
     children: Vec<Arc<RwLock<Node>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Ord, PartialOrd, Eq, Hash)]
+enum TransactionStatus { Active, Committed, Aborted, }
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Transaction {
+    status: HashMap<u32, TransactionStatus>,
 }
 
 #[derive(Debug)]
@@ -1076,7 +1084,7 @@ impl Node {
             .write(true)
             .create(true)
             .truncate(true)
-            .open("/home/_meringue/RustroverProjects/ASMT-V1/example.txt")?;
+            .open("/home/_meringue/RustroverProjects/ASMT/example.txt")?;
 
         writeln!(file, "[0]").expect("TODO: panic message");
         Node::serialization(node, &mut file);
@@ -1462,7 +1470,7 @@ impl Node {
     }
 
     /*    fn checkpoint(mut node: Arc<RwLock<Node>>) -> io::Result<()> {
-            let file_path = "/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt";
+            let file_path = "/home/_meringue/RustroverProjects/ASMT/WAL.txt";
     
             match Node::serialize(Arc::clone(&node)) {
                 Ok(_) => {
@@ -1532,12 +1540,12 @@ impl Node {
         Ok(last_lsm)
     }
 
-    fn wal_immediate_read(node: Arc<RwLock<Node>>, k: u32, wal_file_path: &str, ss_val: Option<u32>) -> io::Result<Option<ValVer>> {
+    fn wal_immediate_read(node: Arc<RwLock<Node>>, k: u32, ss_val: Option<u32>) -> io::Result<Option<ValVer>> {
         struct TemporaryLsmValue {
             temp_value: String,
             temp_lsm : u32
         }
-
+/*
         let mut file = File::open(wal_file_path)?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
@@ -1569,14 +1577,14 @@ impl Node {
             } else {
                 result_wal.push(Version{value: lsm_string_vec[i].temp_value.clone(), xmin:lsm_string_vec[i].temp_lsm, xmax: None });
             }
-        }
+        }*/
 
 
         // HAck: Looks inefficient, redo it later
-        let mut result= result_wal;
+        let mut result= Vec::new();
         match Node::key_position(node,k) {
             Some(version) => {
-                result.extend(version);
+                result = version;
             }
             None => {}
         }
@@ -1678,9 +1686,12 @@ enum Commands {
 
 fn main() -> io::Result<()> {
     NODE_SIZE.set(4).expect("Failed to set size");
-    let serialized_file_path = "/home/_meringue/RustroverProjects/ASMT-V1/example.txt";
-    let wal_file_path = "/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt";
+    let serialized_file_path = "/home/_meringue/RustroverProjects/ASMT/example.txt";
+    let wal_file_path = "/home/_meringue/RustroverProjects/ASMT/WAL.txt";
     let mut new_node = Node::new();
+
+
+    let mut current_transaction = Transaction{status: HashMap::new()};
 
     /*    Node::insert(Arc::clone(&new_node), 1, String::from("Woof"), 1);
         Node::insert(Arc::clone(&new_node), 2, String::from("Woof"), 2);
@@ -1708,8 +1719,10 @@ fn main() -> io::Result<()> {
     let file = OpenOptions::new()
         .append(true)
         .create(true)
-        .open("/home/_meringue/RustroverProjects/ASMT-V1/WAL.txt")?;
+        .open("/home/_meringue/RustroverProjects/ASMT/WAL.txt")?;
     let file = Arc::new(RwLock::new(file));
+
+    let mut txd_count = 0;
 
     println!("CLI!");
     println!("Enter 'Help' for available commands & 'exit' to quit.");
@@ -1753,6 +1766,31 @@ fn main() -> io::Result<()> {
                 }
 
                 match args[0].to_lowercase().as_str() {
+                    "begin" => {
+                        if args.len() != 1 {
+                            println!("Invalid argument");
+                            continue;
+                        }
+                        txd_count += 1;
+                        current_transaction.status.insert(txd_count, TransactionStatus::Active);
+                    }
+
+                    "commit" => {
+                        if args.len() != 1 {
+                            println!("Invalid argument");
+                            continue;
+                        }
+                        current_transaction.status.insert(txd_count, TransactionStatus::Committed);
+                    }
+
+                    "abort" => {
+                        if args.len() != 1 {
+                            println!("Invalid argument");
+                            continue;
+                        }
+                        current_transaction.status.insert(txd_count, TransactionStatus::Committed);
+                    }
+
                     "insert" => {
                         if args.len() != 3 {
                             println!("Invalid argument");
@@ -1762,10 +1800,21 @@ fn main() -> io::Result<()> {
                         let key = args[1].parse::<u32>().expect("Invalid argument");
                         let value = args[2].parse::<String>().expect("Invalid argument");
 
-                        println!("Inserting key {}", key);
+                        let _ = Node::insert(Arc::clone(&new_node), key, value.clone(), txd_count);
+
                         Node::wal_updated(Arc::clone(&file), key, value, wal_file_path)?;
                         CHECKPOINT_COUNTER.fetch_add(1, Ordering::Relaxed);
-                        println!("Inserted");
+                    }
+
+                    "delete" => {
+                        if args.len() != 2 {
+                            println!("Invalid argument");
+                            continue;
+                        }
+
+                        let key = args[1].parse::<u32>().expect("Invalid argument");
+
+                        // mark the latest visible version as xmax = current txn
                     }
 
                     "push" => {
@@ -1777,7 +1826,7 @@ fn main() -> io::Result<()> {
                         new_node = receiver.recv().unwrap();
                     }
 
-                    "get" => {
+                    "dump" => {
                         let ss_val;
                         if args.len() == 2 {
                             ss_val = None;
