@@ -40,7 +40,7 @@ enum ValVer {
 struct Items {
     key: u32,
     rank: u32,
-    val_ver: ValVer
+    version: Vec<Version>
 }
 
 #[derive(Debug, Clone)]
@@ -105,7 +105,7 @@ impl Node {
             if Node::find_and_update_key_version(Arc::clone(&self_node), k, v.clone(), txn) == None {
                 println!("New version");
                 let version = vec!(ver.clone());
-                Node::add_new_keys(Arc::clone(&self_node), Items { key: k, rank: 1, val_ver: VersionVariant(version) });
+                Node::add_new_keys(Arc::clone(&self_node), Items { key: k, rank: 1, version });
             }
         }
 
@@ -147,19 +147,17 @@ impl Node {
         };
         for i in 0..write_guard.input.len() {
             if write_guard.input[i].key == key {
-                if let ValVer::VersionVariant(ref mut version) = write_guard.input[i].val_ver {
-                    let ver_count = version.len();
-                    let ver = Version {value: v.clone(), xmin: txn, xmax: None};
-                    version[ver_count - 1].xmax = Option::from(txn);
-                    version.push(ver);
-                    return Some(());
-                }
+                let ver_count = write_guard.input[i].version.len();
+                let ver = Version {value: v.clone(), xmin: txn, xmax: None};
+                write_guard.input[i].version[ver_count - 1].xmax = Option::from(txn);
+                write_guard.input[i].version.push(ver);
+                return Some(());
             }
         }
-        
         drop(write_guard);
         let read_guard = node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
         if !read_guard.children.is_empty() {
+
             if key < read_guard.input[0].key {
                 let guard = Arc::clone(&read_guard.children[0]);
                 drop(read_guard);
@@ -180,7 +178,6 @@ impl Node {
         }
         None
     }
-
     /// A maintenance function responsible for checking overflows on designated nodes.
     /// The function iteratively checks children of the current Node only if the children exists and the node itself isn't overflowing.
     /// If the current node has its key count greater than maximum designated value, [`Node::split_nodes`] is invoked which splits overflowing node by relocating
@@ -812,12 +809,7 @@ impl Node {
 
             for i in 0..current.input.len() {
                 if current.input[i].key == key {
-                    match &current.input[i].val_ver {
-                        ValVer::VersionVariant(version) => {
-                            return Some(version.clone());
-                        }
-                        _ => println!("No valueVariant found"),
-                    }
+                    return Some(current.input[i].version.clone());
                 }
             }
 
@@ -1097,28 +1089,25 @@ impl Node {
         writeln!(file, "[{:X}]", node_instance.rank).expect("Error writing to file.");
         writeln!(file, "[{:X}]", l).expect("panic message");
         for i in 0..l {
-            if let ValVer::VersionVariant(ref version) = node_instance.input[i].val_ver {
-                write!(file, "[{}]", node_instance.input[i].key).expect("panic message");
-                let version_len = version.len();
-                writeln!(file, "[{}]", version_len).expect("panic message");
-                for ver in version {
-                    write!(file, "[{}]", ver.xmin).expect("panic message");
-                    match ver.xmax {
-                        Some(xm) => {
-                            write!(file, "[{}]", xm).expect("panic message");
-                        }
-
-                        None => {
-                            write!(file, "[-]").expect("panic message");
-                        }
+            write!(file, "[{}]", node_instance.input[i].key).expect("panic message");
+            let version_len = node_instance.input[i].version.len();
+            writeln!(file, "[{}]", version_len).expect("panic message");
+            for ver in &node_instance.input[i].version {
+                write!(file, "[{}]", ver.xmin).expect("panic message");
+                match ver.xmax {
+                    Some(xm) => {
+                        write!(file, "[{}]", xm).expect("panic message");
                     }
-                    let value_len = ver.value.len();
-                    writeln!(file, "[{}]", value_len).expect("panic message");
-                    let x : Vec<char> = ver.value.chars().collect();
-                    write!(file, "{:?}", x).expect("panic message");
-                    writeln!(file,"").expect("panic message");
-
+                    None => {
+                        write!(file, "[-]").expect("panic message");
+                    }
                 }
+                let value_len = ver.value.len();
+                writeln!(file, "[{}]", value_len).expect("panic message");
+                let x : Vec<char> = ver.value.chars().collect();
+                write!(file, "{:?}", x).expect("panic message");
+                writeln!(file,"").expect("panic message");
+
             }
         }
         writeln!(file,"[{:X}]", node_instance.children.len()).expect("panic message");
@@ -1129,7 +1118,6 @@ impl Node {
             }
         }
     }
-
     fn deserialize(serialized_file_path: &str) -> io::Result<(Arc<RwLock<Node>>)> {
         let file = File::open(serialized_file_path.clone())?;
         let metadata = fs::metadata(serialized_file_path)?;
@@ -1301,7 +1289,7 @@ impl Node {
                 xmin_vec.clear();
                 xmax_vec.clear();
 
-                vector_deserialized_items.push(Items {key: keys as u32, rank: node_rank as u32, val_ver: VersionVariant(ver_vec.clone()) });
+                vector_deserialized_items.push(Items {key: keys as u32, rank: node_rank as u32, version: ver_vec });
 
                 // println!("{:?}", vector_deserialized_items);
             }
@@ -1540,81 +1528,67 @@ impl Node {
         Ok(last_lsm)
     }
 
-    fn wal_immediate_read(node: Arc<RwLock<Node>>, k: u32, ss_val: Option<u32>) -> io::Result<Option<ValVer>> {
-        struct TemporaryLsmValue {
-            temp_value: String,
-            temp_lsm : u32
-        }
-/*
-        let mut file = File::open(wal_file_path)?;
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
-
-        let mut meow = Vec::new();
-        for line in contents.lines() {
-            let mut k = Vec::new();
-            for mut c in line.split_whitespace() {
-                c = c.trim_matches('"');
-                k.push(c.to_string());
-            }
-            meow.push(k);
-        }
-
-        let mut lsm_string_vec: Vec<TemporaryLsmValue> = Vec::new();
-
-        for i in meow.iter() {
-            let wal_key = i[1].parse::<u32>().unwrap();
-
-            if wal_key == k {
-                lsm_string_vec.push(TemporaryLsmValue{temp_value: i[2].to_string(), temp_lsm: i[0].parse::<u32>().unwrap()});
-            }
-        }
-
-        let mut result_wal: Vec<Version> = Vec::new();
-        for i in 0..lsm_string_vec.len() {
-            if (i < lsm_string_vec.len()-1) {
-                result_wal.push(Version{value: lsm_string_vec[i].temp_value.clone(), xmin:lsm_string_vec[i].temp_lsm, xmax: Some(lsm_string_vec[i+1].temp_lsm) });
-            } else {
-                result_wal.push(Version{value: lsm_string_vec[i].temp_value.clone(), xmin:lsm_string_vec[i].temp_lsm, xmax: None });
-            }
-        }*/
-
-
+    fn select_key(node: Arc<RwLock<Node>>, k: u32, val: u32, status: Arc<RwLock<Transaction>>) -> Option<String> {
         // HAck: Looks inefficient, redo it later
-        let mut result= Vec::new();
-        match Node::key_position(node,k) {
+        let mut result = Vec::new();
+        match Node::key_position(node, k) {
             Some(version) => {
                 result = version;
             }
             None => {}
         }
-        
-        if let Some(val) = ss_val {
-            if result.is_empty() {
-                return Ok(None)
-            }
+        if result.is_empty() {
+            return None
+        }
+        let status_read_guard = status.read().unwrap();
+        for i in 0..result.iter().len() {
+            let result_max = result[i].xmax;
+            let result_min = result[i].xmin;
+            let min_status = status_read_guard.status.get(&result[i].xmin);
 
-            for i in 0..result.iter().len() {
-                let result_max = result[i].xmax;
-                
-                match result_max {
-                    Some(xmax) => {
-                        if (result[i].xmin < val && xmax > val) {
-                            return Ok(Some(ValueVariant(result[i].clone().value)));
+            let (mut visible_xmax, mut visible_xmin) = (false, false);
+
+            match result_max {
+                Some(xmax) => {
+                    if xmax >= val {
+                        visible_xmax = true;
+                        // visible -- xmax >= current_txd_id
+                    }
+
+                    let max_status = status_read_guard.status.get(&xmax);
+
+                    if let Some(max_temp_status) = max_status {
+                        if let TransactionStatus::Active = max_temp_status {
+                            visible_xmax = true;
+                            // visible -- xmax == ACTIVE
                         }
                     }
-                    None => {
-                        if (result[i].xmin < val) {
-                            return Ok(Some(ValueVariant(result[i].clone().value)));
-                        }
-                    }
-                    
+
+                }
+                None => {
+                    visible_xmax = true;
+                    // visible -- xmax == None
                 }
             }
-        }
-        Ok(Some(VersionVariant(result)))
-    }
 
+            if (result_min == val) {
+                visible_xmin = true;
+                // visible -- min == current_txd_id
+            } else if let Some(min_temp_status) = min_status {
+                if let TransactionStatus::Committed = min_temp_status && result_min < val{
+                    visible_xmin = true;
+                    // visible
+                }
+            }
+
+
+            if visible_xmax && visible_xmin {
+                return Some(result[i].value.clone());
+            }
+        }
+
+        None
+    }
     //TODO: Fix deleting.
     fn wal_immediate_delete(node: Arc<RwLock<Node>>, key: u32, wal_file_path: &str) -> io::Result<()> {
         let mut file = File::open(wal_file_path)?;
@@ -1662,27 +1636,6 @@ impl I32OrString {
     }
 }
 
-#[derive(Parser)]
-#[command(name = "WAT")]
-#[command(about = "WATERMELON")]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    Insert {
-        key: u32,
-        value: String,
-    },
-    Push,
-    Get {
-        key: u32,
-    },
-    Tree,
-    Stats,
-}
 
 fn main() -> io::Result<()> {
     NODE_SIZE.set(4).expect("Failed to set size");
@@ -1691,7 +1644,7 @@ fn main() -> io::Result<()> {
     let mut new_node = Node::new();
 
 
-    let mut current_transaction = Transaction{status: HashMap::new()};
+    let mut current_transaction = Arc::new(RwLock::new(Transaction{status: HashMap::new()}));
 
     /*    Node::insert(Arc::clone(&new_node), 1, String::from("Woof"), 1);
         Node::insert(Arc::clone(&new_node), 2, String::from("Woof"), 2);
@@ -1772,7 +1725,7 @@ fn main() -> io::Result<()> {
                             continue;
                         }
                         txd_count += 1;
-                        current_transaction.status.insert(txd_count, TransactionStatus::Active);
+                        current_transaction.write().unwrap().status.insert(txd_count, TransactionStatus::Active);
                     }
 
                     "commit" => {
@@ -1780,7 +1733,7 @@ fn main() -> io::Result<()> {
                             println!("Invalid argument");
                             continue;
                         }
-                        current_transaction.status.insert(txd_count, TransactionStatus::Committed);
+                        current_transaction.write().unwrap().status.insert(txd_count, TransactionStatus::Committed);
                     }
 
                     "abort" => {
@@ -1788,7 +1741,7 @@ fn main() -> io::Result<()> {
                             println!("Invalid argument");
                             continue;
                         }
-                        current_transaction.status.insert(txd_count, TransactionStatus::Committed);
+                        current_transaction.write().unwrap().status.insert(txd_count, TransactionStatus::Committed);
                     }
 
                     "insert" => {
@@ -1817,6 +1770,8 @@ fn main() -> io::Result<()> {
                         // mark the latest visible version as xmax = current txn
                     }
 
+
+                    // What does push do now?
                     "push" => {
                         if args.len() != 1 {
                             println!("Invalid argument");
@@ -1826,38 +1781,45 @@ fn main() -> io::Result<()> {
                         new_node = receiver.recv().unwrap();
                     }
 
-                    "dump" => {
-                        let ss_val;
-                        if args.len() == 2 {
-                            ss_val = None;
-                        } else if args.len() == 3 {
-                            ss_val = Some(args[2].parse::<u32>().expect("Invalid argument"));
-                        } else {
+                    "select" => {
+                        if args.len() != 2 {
                             println!("Invalid argument");
                             continue;
                         }
-
                         let key = args[1].parse::<u32>().expect("Invalid argument");
 
-                        match Node::wal_immediate_read(Arc::clone(&new_node), key, wal_file_path, ss_val) {
-                            Ok(Some(val_ver)) => {
-                                match val_ver {
-                                    VersionVariant(version) => {
-                                        for i in version.iter() {
-                                            println!("Value: {:?} [{:?} - {:?}]", i.value, i.xmin, i.xmax);
-                                        }
-                                    }
-                                    ValueVariant(value) => {
-                                        println!("Value: {:?}", value);
+                        match Node::select_key(Arc::clone(&new_node), key, txd_count, Arc::clone(&current_transaction)) {
+                            Some(value) => {
+                                println!("Value: {:?}", value);
+                            }
+
+                            None => {
+                                println!("Key not found");
+                            }
+                        }
+                    }
+
+                    "dump" => {
+                        if args.len() != 2 {
+                            println!("Invalid argument");
+                            continue;
+                        }
+                        let key = args[1].parse::<u32>().expect("Invalid argument");
+
+                        match Node::key_position(Arc::clone(&new_node), key) {
+                            Some(value) => {
+                                for i in value.iter() {
+                                    print!("Value: \"{:?}\" [xmin: {} -- xmax: ", i.value, i.xmin);
+                                    if let Some(xmax) = i.xmax {
+                                        println!("{}]", xmax);
+                                    } else {
+                                        println!("∞]");
                                     }
                                 }
+                            }
 
-                            }
-                            Ok(None) => {
-                                println!("No value found");
-                            }
-                            Err(e) => {
-                                println!("{}", e);
+                            None => {
+                                println!("Key not found");
                             }
                         }
                     }
@@ -2009,15 +1971,10 @@ impl Node {
         let items: Vec<String> = self.input
             .iter()
             .map(|item| {
-                // TODO: REMOVE THE HACKY SOLUTION
-                let mut current_ver= &vec!(Version { value: String::from("A"), xmin: 1, xmax: None });
-                if let VersionVariant(version) = &item.val_ver {
-                    current_ver = version;
-                }
                 let visible_versions = if let Some(tx) = tx_id {
-                    self.format_visible_versions(current_ver, tx)
+                    self.format_visible_versions(&item.version, tx)
                 } else {
-                    self.format_all_versions(current_ver)
+                    self.format_all_versions(&item.version)
                 };
                 format!("{}:{} (rank: {})", item.key, visible_versions, item.rank)
             })
@@ -2139,15 +2096,9 @@ impl Node {
 
         // Count versions and visible keys
         for item in &self.input {
-            // TODO: REMOVE THE HACKY SOLUTION
-            let mut current_ver= &vec!(Version { value: String::from("A"), xmin: 1, xmax: None });
-            if let VersionVariant(version) = &item.val_ver {
-                current_ver = version;
-            }
-            stats.total_versions += current_ver.len();
-
+            stats.total_versions += item.version.len();
             if let Some(tx) = tx_id {
-                let has_visible_version = current_ver
+                let has_visible_version = item.version
                     .iter()
                     .any(|v| self.is_version_visible(v, tx));
                 if has_visible_version {
@@ -2196,11 +2147,6 @@ impl Node {
 
         // Print detailed version info for each item
         for (i, item) in self.input.iter().enumerate() {
-            // TODO: REMOVE THE HACKY SOLUTION
-            let mut current_ver= &vec!(Version { value: String::from("A"), xmin: 1, xmax: None });
-            if let VersionVariant(version) = &item.val_ver {
-                current_ver = version;
-            }
             let item_connector = if i == self.input.len() - 1 && self.children.is_empty() {
                 "└── "
             } else {
@@ -2209,8 +2155,8 @@ impl Node {
 
             println!("{}{}Key {}: (rank: {})", child_prefix, item_connector, item.key, item.rank);
 
-            for (v_idx, version) in current_ver.iter().enumerate() {
-                let version_connector = if v_idx == current_ver.len() - 1 {
+            for (v_idx, version) in item.version.iter().enumerate() {
+                let version_connector = if v_idx == item.version.len() - 1 {
                     "    └── "
                 } else {
                     "    ├── "
@@ -2220,7 +2166,6 @@ impl Node {
                     Some(xmax) => format!("{}", xmax),
                     None => "∞".to_string(),
                 };
-
                 println!("{}{}\"{}\" [TX {}-{}]",
                          child_prefix, version_connector,
                          version.value, version.xmin, xmax_str);
