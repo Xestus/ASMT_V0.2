@@ -102,13 +102,19 @@ impl Node {
     fn insert(mut self_node: Arc<RwLock<Node>>, k: u32, v: String, txn: u32) -> io::Result<()> {
         {
             let ver = Version {value: v.clone(), xmin: txn, xmax: None};
-            if Node::find_and_update_key_version(Arc::clone(&self_node), k, v.clone(), txn) == None {
-                println!("New version");
-                let version = vec!(ver.clone());
-                Node::add_new_keys(Arc::clone(&self_node), Items { key: k, rank: 1, version });
+
+            match Node::find_and_update_key_version(Arc::clone(&self_node), k, Some(v), txn) {
+                Some(_) => {
+                    println!("Key already exists");
+                    return Ok(());
+                },
+                None => {
+                    println!("New version");
+                    let version = vec!(ver.clone());
+                    Node::add_new_keys(Arc::clone(&self_node), Items { key: k, rank: 1, version });
+                }
             }
         }
-
 
         self_node = Node::overflow_check(self_node);
         self_node = Node::min_size_check(self_node);
@@ -140,7 +146,7 @@ impl Node {
     /// # THIS IS A TEMPORARY HACK SOLUTION. IT'LL STAY THERE TILL I ADD AN ACTUAL THREAD SAFE FUNCTION.
     /// ## DO NOT TAKE THIS SERIOUSLY.
     /// ### :(
-    fn find_and_update_key_version(node: Arc<RwLock<Node>>, key: u32, v: String, txn: u32) -> Option<()> {
+    fn find_and_update_key_version(node: Arc<RwLock<Node>>, key: u32, v: Option<String>, txn: u32) -> Option<()> {
         let mut write_guard = {
             let w1 = node.write();
             w1.unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -148,9 +154,12 @@ impl Node {
         for i in 0..write_guard.input.len() {
             if write_guard.input[i].key == key {
                 let ver_count = write_guard.input[i].version.len();
-                let ver = Version {value: v.clone(), xmin: txn, xmax: None};
                 write_guard.input[i].version[ver_count - 1].xmax = Option::from(txn);
-                write_guard.input[i].version.push(ver);
+
+                if let Some(value) = v {
+                    let ver = Version {value, xmin: txn, xmax: None};
+                    write_guard.input[i].version.push(ver);
+                }
                 return Some(());
             }
         }
@@ -1528,7 +1537,7 @@ impl Node {
         Ok(last_lsm)
     }
 
-    fn select_key(node: Arc<RwLock<Node>>, k: u32, val: u32, status: Arc<RwLock<Transaction>>) -> Option<String> {
+    fn select_key(node: Arc<RwLock<Node>>, k: u32, txd: u32, status: Arc<RwLock<Transaction>>) -> Option<String> {
         // HAck: Looks inefficient, redo it later
         let mut result = Vec::new();
         match Node::key_position(node, k) {
@@ -1550,7 +1559,7 @@ impl Node {
 
             match result_max {
                 Some(xmax) => {
-                    if xmax >= val {
+                    if xmax >= txd {
                         visible_xmax = true;
                         // visible -- xmax >= current_txd_id
                     }
@@ -1571,11 +1580,11 @@ impl Node {
                 }
             }
 
-            if (result_min == val) {
+            if (result_min == txd) {
                 visible_xmin = true;
                 // visible -- min == current_txd_id
             } else if let Some(min_temp_status) = min_status {
-                if let TransactionStatus::Committed = min_temp_status && result_min < val{
+                if let TransactionStatus::Committed = min_temp_status && result_min < txd{
                     visible_xmin = true;
                     // visible
                 }
@@ -1588,35 +1597,6 @@ impl Node {
         }
 
         None
-    }
-    //TODO: Fix deleting.
-    fn wal_immediate_delete(node: Arc<RwLock<Node>>, key: u32, wal_file_path: &str) -> io::Result<()> {
-        let mut file = File::open(wal_file_path)?;
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
-
-        let mut file = OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(wal_file_path)?;
-
-        for line in contents.lines() {
-            let mut k = Vec::new();
-            for mut c in line.split_whitespace() {
-                c = c.trim_matches('"');
-                k.push(c.to_string());
-            }
-
-            if k[1].parse::<u32>().unwrap() != key {
-                writeln!(file, "{:?}", contents)?;
-            } else {
-                println!("Deleted the key at LSM {:?}", k[0]);
-            }
-        }
-
-        Node::remove_key(Arc::clone(&node), key);
-
-        Ok(())
     }
 }
 
@@ -1741,7 +1721,7 @@ fn main() -> io::Result<()> {
                             println!("Invalid argument");
                             continue;
                         }
-                        current_transaction.write().unwrap().status.insert(txd_count, TransactionStatus::Committed);
+                        current_transaction.write().unwrap().status.insert(txd_count, TransactionStatus::Aborted);
                     }
 
                     "insert" => {
@@ -1759,6 +1739,25 @@ fn main() -> io::Result<()> {
                         CHECKPOINT_COUNTER.fetch_add(1, Ordering::Relaxed);
                     }
 
+                    "update" => {
+                        if args.len() != 3 {
+                            println!("Invalid argument");
+                            continue;
+                        }
+
+                        let key = args[1].parse::<u32>().expect("Invalid argument");
+                        let value = args[2].parse::<String>().expect("Invalid argument");
+
+                        match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), txd_count) {
+                            Some(_) => {
+
+                            }
+                            None => {
+                                println!("Key not found");
+                            }
+                        }
+                    }
+
                     "delete" => {
                         if args.len() != 2 {
                             println!("Invalid argument");
@@ -1767,7 +1766,15 @@ fn main() -> io::Result<()> {
 
                         let key = args[1].parse::<u32>().expect("Invalid argument");
 
-                        // mark the latest visible version as xmax = current txn
+                        match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, txd_count) {
+                            Some(_) => {
+
+                            }
+                            None => {
+                                println!("Key not found");
+                            }
+                        }
+
                     }
 
 
@@ -1809,7 +1816,7 @@ fn main() -> io::Result<()> {
                         match Node::key_position(Arc::clone(&new_node), key) {
                             Some(value) => {
                                 for i in value.iter() {
-                                    print!("Value: \"{:?}\" [xmin: {} -- xmax: ", i.value, i.xmin);
+                                    print!("Value: {:?} [xmin: {} -- xmax: ", i.value, i.xmin);
                                     if let Some(xmax) = i.xmax {
                                         println!("{}]", xmax);
                                     } else {
@@ -1822,17 +1829,7 @@ fn main() -> io::Result<()> {
                                 println!("Key not found");
                             }
                         }
-                    }
-
-                    "delete" => {
-                        if args.len() != 2 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-
-                        let key = args[1].parse::<u32>().expect("Invalid argument");
-
-                        // Node::wal_immediate_delete(Arc::clone(&new_node), key, wal_file_path)?;
+                        println!("{:?}", txd_count);
                     }
 
                     "tree" => {
