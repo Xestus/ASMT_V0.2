@@ -1486,19 +1486,12 @@ impl Node {
             Ok(())
         }*/
 
-    fn wal_updated(file: Arc<RwLock<File>>,k: u32, v: String, wal_file_path: &str) -> io::Result<()> {
-        let mut last_lsm = 99;
-        match Node::find_last_lsn(wal_file_path) {
-            Ok(value) => {
-                last_lsm = value;
-            }
-            Err(e) => {
-                println!("{}", e);
-            }
-        }
+    fn flush_to_wal(file: Arc<RwLock<File>>, args: Vec<&str>) -> io::Result<()> {
+        let args = args.join(" ");
+
         let mut file_instance = file.write().unwrap();
 
-        writeln!(file_instance, "{:?} {:?} {:?}", last_lsm + 1, k, v).expect("TODO: panic message");
+        writeln!(file_instance, "{:?}", args).expect("TODO: panic message");
         file_instance.sync_all()?;
 
         COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -1623,8 +1616,7 @@ fn main() -> io::Result<()> {
     let wal_file_path = "/home/_meringue/RustroverProjects/ASMT/WAL.txt";
     let mut new_node = Node::new();
 
-
-    let mut current_transaction = Arc::new(RwLock::new(Transaction{status: HashMap::new()}));
+    let current_transaction = Arc::new(RwLock::new(Transaction{status: HashMap::new()}));
 
     /*    Node::insert(Arc::clone(&new_node), 1, String::from("Woof"), 1);
         Node::insert(Arc::clone(&new_node), 2, String::from("Woof"), 2);
@@ -1649,10 +1641,11 @@ fn main() -> io::Result<()> {
         }
     }
 
-    let file = OpenOptions::new()
+    let mut file = OpenOptions::new()
         .append(true)
         .create(true)
         .open("/home/_meringue/RustroverProjects/ASMT/WAL.txt")?;
+
     let file = Arc::new(RwLock::new(file));
 
     let mut txd_count = 0;
@@ -1666,7 +1659,7 @@ fn main() -> io::Result<()> {
     let (sender, receiver) = mpsc::channel();
     let t1 = thread::spawn(move || {
         while let Ok(_) = rx.recv() {
-            match push_to_memory(Arc::clone(&cloned_node),serialized_file_path, wal_file_path) {
+            match something(Arc::clone(&cloned_node),serialized_file_path, wal_file_path) {
                 Ok(output_node) => {
                     sender.send(output_node).unwrap();
                 }
@@ -1677,6 +1670,30 @@ fn main() -> io::Result<()> {
         }
     });
 
+    // WAL data read
+    match read_file(wal_file_path) {
+        Ok(metadata) => {
+            for items in metadata.lines() {
+                let items = items.replace("\"", "");
+                match CLI(items, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node)) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        println!("WAL recovery error: {}", e);
+                    }
+                }
+            }
+
+            match empty_file(wal_file_path) {
+                Ok(_) => {}
+                Err(e) => {
+                    println!("File truncation error: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            println!("{}", e);
+        }
+    }
 
     loop {
         print!(">  ");
@@ -1686,198 +1703,12 @@ fn main() -> io::Result<()> {
 
         match io::stdin().read_line(&mut cli_input) {
             Ok(_) => {
-                let cli_input = cli_input.trim();
-
-                if cli_input.is_empty() {
-                    continue;
-                }
-
-                let args = cli_input.split_whitespace().collect::<Vec<&str>>();
-
-                if args.is_empty() {
-                    continue;
-                }
-
-                match args[0].to_lowercase().as_str() {
-                    "begin" => {
-                        if args.len() != 1 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-                        txd_count += 1;
-                        current_transaction.write().unwrap().status.insert(txd_count, TransactionStatus::Active);
-                    }
-
-                    "commit" => {
-                        if args.len() != 1 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-                        current_transaction.write().unwrap().status.insert(txd_count, TransactionStatus::Committed);
-                    }
-
-                    "abort" => {
-                        if args.len() != 1 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-                        current_transaction.write().unwrap().status.insert(txd_count, TransactionStatus::Aborted);
-                    }
-
-                    "insert" => {
-                        if args.len() != 3 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-
-                        let key = args[1].parse::<u32>().expect("Invalid argument");
-                        let value = args[2].parse::<String>().expect("Invalid argument");
-
-                        let _ = Node::insert(Arc::clone(&new_node), key, value.clone(), txd_count);
-
-                        Node::wal_updated(Arc::clone(&file), key, value, wal_file_path)?;
-                        CHECKPOINT_COUNTER.fetch_add(1, Ordering::Relaxed);
-                    }
-
-                    "update" => {
-                        if args.len() != 3 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-
-                        let key = args[1].parse::<u32>().expect("Invalid argument");
-                        let value = args[2].parse::<String>().expect("Invalid argument");
-
-                        match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), txd_count) {
-                            Some(_) => {
-
-                            }
-                            None => {
-                                println!("Key not found");
-                            }
-                        }
-                    }
-
-                    "delete" => {
-                        if args.len() != 2 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-
-                        let key = args[1].parse::<u32>().expect("Invalid argument");
-
-                        match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, txd_count) {
-                            Some(_) => {
-
-                            }
-                            None => {
-                                println!("Key not found");
-                            }
-                        }
-
-                    }
-
-
-                    // What does push do now?
-                    "push" => {
-                        if args.len() != 1 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-                        tx.send(1).unwrap();
-                        new_node = receiver.recv().unwrap();
-                    }
-
-                    "select" => {
-                        if args.len() != 2 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-                        let key = args[1].parse::<u32>().expect("Invalid argument");
-
-                        match Node::select_key(Arc::clone(&new_node), key, txd_count, Arc::clone(&current_transaction)) {
-                            Some(value) => {
-                                println!("Value: {:?}", value);
-                            }
-
-                            None => {
-                                println!("Key not found");
-                            }
-                        }
-                    }
-
-                    "dump" => {
-                        if args.len() != 2 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-                        let key = args[1].parse::<u32>().expect("Invalid argument");
-
-                        match Node::key_position(Arc::clone(&new_node), key) {
-                            Some(value) => {
-                                for i in value.iter() {
-                                    print!("Value: {:?} [xmin: {} -- xmax: ", i.value, i.xmin);
-                                    if let Some(xmax) = i.xmax {
-                                        println!("{}]", xmax);
-                                    } else {
-                                        println!("∞]");
-                                    }
-                                }
-                            }
-
-                            None => {
-                                println!("Key not found");
-                            }
-                        }
-                        println!("{:?}", txd_count);
-                    }
-
-                    "tree" => {
-                        if args.len() != 1 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-
-                        println!("{:?}", new_node.read().unwrap().print_tree());
-                    }
-
-                    "stats" => {
-                        if args.len() != 1 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-
-                        println!("{:?}", new_node.read().unwrap().print_stats());
-                    }
-
-                    "help" => {
-                        if args.len() != 1 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-
-                        println!("  insert <key> <value>  - Insert a key-value pair");
-                        println!("  push                  - Push inserted key-value to B-Tree");
-                        println!("  get <key>             - Get value for a key");
-                        println!("  delete <key>          - Delete a key (Broken Sorry)");
-                        println!("  tree                  - Show B-Tree in ASCII art form");
-                        println!("  stats                 - Show B-Tree Stats");
-                        println!("  help                  - Show this help");
-                        println!("  exit                  - Exit the program");
-                    }
-
-                    "exit" => {
-                        if args.len() != 1 {
-                            println!("Invalid argument");
-                            continue;
-                        }
-
-                        println!("Exiting");
-                        break;
-                    }
-
-                    _ => {
-                        println!("Unknown command: {}. Type 'help' for available commands.", args[0]);
+                match CLI(cli_input, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node)) {
+                    Ok(1) => { continue; }
+                    Ok(2) => {break;}
+                    Ok(_) => {}
+                    Err(e) => {
+                        println!("Error: {}", e);
                     }
                 }
 
@@ -1900,12 +1731,247 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn push_to_memory(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str) -> io::Result<Arc<RwLock<Node>>> {
+fn something(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str) -> io::Result<Arc<RwLock<Node>>> {
     println!("Pushing disk values to in-memory B-Tree");
     let returned_node = Node::push_to_memory(node, serialized_file_path, wal_file_path);
     CHECKPOINT_COUNTER.store(0, Ordering::Relaxed);
     println!("Pushed disk values");
     returned_node
+}
+
+fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>,new_node: Arc<RwLock<Node>>  ) -> io::Result<(u8)> {
+    let cli_input = cli_input.trim();
+
+    if cli_input.is_empty() {
+        return Ok(1);
+    }
+
+    let args = cli_input.split_whitespace().collect::<Vec<&str>>();
+
+    if args.is_empty() {
+        return Ok(1);
+    }
+    match args[0].to_lowercase().as_str() {
+        "begin" => {
+            if args.len() != 1 {
+                println!("Invalid argument");
+                return Ok(1);
+            }
+
+            Node::flush_to_wal(Arc::clone(&file), args)?;
+
+            *txd_count += 1;
+            current_transaction.write().unwrap().status.insert(*txd_count, TransactionStatus::Active);
+        }
+
+        "commit" => {
+            if args.len() != 1 {
+                println!("Invalid argument");
+                return Ok(1);
+            }
+
+            Node::flush_to_wal(Arc::clone(&file), args)?;
+            current_transaction.write().unwrap().status.insert(*txd_count, TransactionStatus::Committed);
+        }
+
+        "abort" => {
+            if args.len() != 1 {
+                println!("Invalid argument");
+                return Ok(1);
+            }
+
+            Node::flush_to_wal(Arc::clone(&file), args)?;
+
+            current_transaction.write().unwrap().status.insert(*txd_count, TransactionStatus::Aborted);
+        }
+
+        "insert" => {
+            if args.len() != 3 {
+                println!("Invalid argument");
+                return Ok(1);
+            }
+
+            Node::flush_to_wal(Arc::clone(&file), args.clone())?;
+
+            let key = args[1].parse::<u32>().expect("Invalid argument");
+            let value = args[2].parse::<String>().expect("Invalid argument");
+
+            let _ = Node::insert(Arc::clone(&new_node), key, value, *txd_count);
+
+            CHECKPOINT_COUNTER.fetch_add(1, Ordering::Relaxed);
+        }
+
+        "update" => {
+            if args.len() != 3 {
+                println!("Invalid argument");
+                return Ok(1);
+            }
+
+            Node::flush_to_wal(Arc::clone(&file), args.clone())?;
+
+
+            let key = args[1].parse::<u32>().expect("Invalid argument");
+            let value = args[2].parse::<String>().expect("Invalid argument");
+
+            match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), *txd_count) {
+                Some(_) => {
+
+                }
+                None => {
+                    println!("Key not found");
+                }
+            }
+        }
+
+        "delete" => {
+            if args.len() != 2 {
+                println!("Invalid argument");
+                return Ok(1);
+            }
+
+            Node::flush_to_wal(Arc::clone(&file), args.clone())?;
+
+            let key = args[1].parse::<u32>().expect("Invalid argument");
+
+            match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, *txd_count) {
+                Some(_) => {
+
+                }
+                None => {
+                    println!("Key not found");
+                }
+            }
+
+        }
+
+
+        /// What does push do now? TODO: FIND ITS USE
+/*        "push" => {
+            if args.len() != 1 {
+                println!("Invalid argument");
+                continue;
+            }
+            tx.send(1).unwrap();
+            new_node = receiver.recv().unwrap();
+        }*/
+
+        "select" => {
+            if args.len() != 2 {
+                println!("Invalid argument");
+                return Ok(1);
+            }
+            let key = args[1].parse::<u32>().expect("Invalid argument");
+
+            match Node::select_key(Arc::clone(&new_node), key, *txd_count, Arc::clone(&current_transaction)) {
+                Some(value) => {
+                    println!("Value: {:?}", value);
+                }
+
+                None => {
+                    println!("Key not found");
+                }
+            }
+        }
+
+        "dump" => {
+            if args.len() != 2 {
+                println!("Invalid argument");
+                return Ok(1);
+            }
+            let key = args[1].parse::<u32>().expect("Invalid argument");
+
+            match Node::key_position(Arc::clone(&new_node), key) {
+                Some(value) => {
+                    for i in value.iter() {
+                        print!("Value: {:?} [xmin: {} -- xmax: ", i.value, i.xmin);
+                        if let Some(xmax) = i.xmax {
+                            println!("{}]", xmax);
+                        } else {
+                            println!("∞]");
+                        }
+                    }
+                }
+
+                None => {
+                    println!("Key not found");
+                }
+            }
+            println!("{:?}", txd_count);
+        }
+
+        "tree" => {
+            if args.len() != 1 {
+                println!("Invalid argument");
+                return Ok(1);
+            }
+
+            println!("{:?}", new_node.read().unwrap().print_tree());
+        }
+
+        "stats" => {
+            if args.len() != 1 {
+                println!("Invalid argument");
+                return Ok(1);
+            }
+
+            println!("{:?}", new_node.read().unwrap().print_stats());
+        }
+
+        "help" => {
+            if args.len() != 1 {
+                println!("Invalid argument");
+                return Ok(1);
+            }
+
+            println!("  insert <key> <value>  - Insert a key-value pair");
+            println!("  push                  - Push inserted key-value to B-Tree");
+            println!("  get <key>             - Get value for a key");
+            println!("  delete <key>          - Delete a key (Broken Sorry)");
+            println!("  tree                  - Show B-Tree in ASCII art form");
+            println!("  stats                 - Show B-Tree Stats");
+            println!("  help                  - Show this help");
+            println!("  exit                  - Exit the program");
+        }
+
+        "exit" => {
+            if args.len() != 1 {
+                println!("Invalid argument");
+                return Ok(1);
+            }
+
+            println!("Exiting");
+            return Ok(2);
+        }
+
+        _ => {
+            println!("Unknown command: {}. Type 'help' for available commands.", args[0]);
+        }
+    }
+
+    Ok(0)
+}
+
+fn read_file(file_path: &str) -> io::Result<String> {
+    let mut file = File::open(file_path)?;
+    let mut contents = String::new();
+
+    file.read_to_string(&mut contents)?;
+
+    File::create(file_path)?;
+
+    Ok(contents)
+}
+
+fn empty_file(file_path: &str) -> io::Result<()> {
+    println!("{:?}", file_path);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(file_path)?;
+
+    file.write_all(b"")?;
+
+    Ok(())
 }
 
 impl Node {
