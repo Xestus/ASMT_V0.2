@@ -20,7 +20,7 @@ use clap::{Parser, Subcommand};
 use crate::ValVer::{ValueVariant, VersionVariant};
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
-static COUNTER: AtomicUsize = AtomicUsize::new(100);
+static LAST_ACTIVE_TXD: AtomicUsize = AtomicUsize::new(100);
 static CHECKPOINT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, PartialEq, Ord, PartialOrd, Eq, Hash)]
@@ -434,7 +434,7 @@ impl Node {
 
         let len = self_instance.children.len();
         if len >= 2 {
-            // Extract keys + original index
+            // Extract keys plus original index
             let mut key_nodes: Vec<_> = self_instance.children[len - 2..]
                 .iter()
                 .map(|node| {
@@ -583,12 +583,12 @@ impl Node {
     /// - The number of middle key is always singular i.e. the node will only have 1 key which violates the B-Tree invariant.
     ///
     /// # Working:
-    /// - The first iterator pushes indices of the current node's child that violates the B-Tree invariant of 
+    /// - The first iterator pushes indices of the current node's child that violates the B-Tree invariant of
     ///  `child.input.len() < NODE_SIZE/2 && child.rank > 1` to a temporary storage vector.
     ///     - Rank of root node is 1 and root node can have 1 key, `child.rank > 1` skips root node.
     /// - The second iterator reverses the iterator's direction and pushes the parent node and the invariant violator child to [`Node::propagate_up`]
-    ///   that propagates the child & its own children to its parent. 
-    /// - The third iterator re-invokes the current function **if** any child of the current node has children. 
+    ///   that propagates the child & its own children to its parent.
+    /// - The third iterator re-invokes the current function **if** any child of the current node has children.
     ///
     /// # Conditions:
     /// - `child_lock.input.len() < NODE_SIZE/2` still works if the maximum number of node count is either even or odd.
@@ -1494,40 +1494,8 @@ impl Node {
         writeln!(file_instance, "{:?}", args).expect("TODO: panic message");
         file_instance.sync_all()?;
 
-        COUNTER.fetch_add(1, Ordering::SeqCst);
 
         Ok(())
-    }
-
-    fn find_last_lsn(wal_file_path: &str) -> io::Result<(u32)> {
-        let mut file = File::open(wal_file_path)?;
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
-
-        // println!("{:?}", contents);
-
-        if contents.is_empty() {
-            return Ok(99)
-        }
-        let mut meow = Vec::new();
-        for line in contents.lines() {
-            let mut k = Vec::new();
-            for mut c in line.split_whitespace() {
-                c = c.trim_matches('"');
-                k.push(c.to_string());
-            }
-            meow.push(k);
-        }
-
-        let mut last_lsm = 1;
-
-        for i in meow.iter() {
-            last_lsm = i[0].parse::<u32>().unwrap();
-        }
-
-        drop(file);
-
-        Ok(last_lsm)
     }
 
     fn select_key(node: Arc<RwLock<Node>>, k: u32, txd: u32, status: Arc<RwLock<Transaction>>) -> Option<String> {
@@ -1591,6 +1559,53 @@ impl Node {
 
         None
     }
+
+    fn fetch_serializable_btree(node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+        let xmax_threshold = LAST_ACTIVE_TXD.load(Ordering::SeqCst) as u32;
+
+        {
+            let mut node_guard = node.write().unwrap();
+
+            for input in &mut node_guard.input {
+                let mut to_be_removed = Vec::new();
+                for i in 0..input.version.len() {
+                    if let Some(xmax) = input.version[i].xmax {
+                        if xmax >= xmax_threshold {
+                            input.version[i].xmax = None;
+                        }
+                    }
+
+                    if input.version[i].xmin > xmax_threshold {
+                        to_be_removed.push(i);
+                    }
+                }
+
+                for i in to_be_removed.iter().rev() {
+                    input.version.remove(*i);
+                }
+            }
+        }
+
+        let self_children_empty = {
+            let self_read = node.read().unwrap();
+            self_read.children.is_empty()
+        };
+
+        if self_children_empty {
+            return node;
+        }
+
+        let node_guard = node.read().unwrap();
+
+        for child_arc in &node_guard.children {
+            let clone = Arc::clone(child_arc);
+            Node::fetch_serializable_btree(clone);
+        }
+
+        drop(node_guard);
+
+        node
+    }
 }
 
 impl I32OrString {
@@ -1608,7 +1623,6 @@ impl I32OrString {
         }
     }
 }
-
 
 fn main() -> io::Result<()> {
     NODE_SIZE.set(4).expect("Failed to set size");
@@ -1628,7 +1642,7 @@ fn main() -> io::Result<()> {
         Node::insert(Arc::clone(&new_node), 3, String::from("Meow"), 12);
     
         println!("{:?}", new_node.read().unwrap().print_tree());
-        
+
         Node::serialize(Arc::clone(&new_node));
         Node::deserialize(serialized_file_path);
     */
@@ -1641,7 +1655,7 @@ fn main() -> io::Result<()> {
         }
     }
 
-    let mut file = OpenOptions::new()
+    let file = OpenOptions::new()
         .append(true)
         .create(true)
         .open("/home/_meringue/RustroverProjects/ASMT/WAL.txt")?;
@@ -1694,7 +1708,6 @@ fn main() -> io::Result<()> {
             println!("{}", e);
         }
     }
-
     loop {
         print!(">  ");
         io::stdout().flush()?;
@@ -1758,9 +1771,11 @@ fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
                 return Ok(1);
             }
 
+
             Node::flush_to_wal(Arc::clone(&file), args)?;
 
             *txd_count += 1;
+
             current_transaction.write().unwrap().status.insert(*txd_count, TransactionStatus::Active);
         }
 
@@ -1770,6 +1785,7 @@ fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
                 return Ok(1);
             }
 
+            LAST_ACTIVE_TXD.store(*txd_count as usize, Ordering::SeqCst);
             Node::flush_to_wal(Arc::clone(&file), args)?;
             current_transaction.write().unwrap().status.insert(*txd_count, TransactionStatus::Committed);
         }
@@ -1798,7 +1814,7 @@ fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
 
             let _ = Node::insert(Arc::clone(&new_node), key, value, *txd_count);
 
-            CHECKPOINT_COUNTER.fetch_add(1, Ordering::Relaxed);
+            CHECKPOINT_COUNTER.fetch_add(1, Ordering::SeqCst);
         }
 
         "update" => {
@@ -1844,9 +1860,24 @@ fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
 
         }
 
+        "checkpoint" => {
+            if args.len() != 1 {
+                println!("Invalid argument");
+                return Ok(1);
+            }
+
+            // println!("{:?}", LAST_ACTIVE_TXD.load(Ordering::SeqCst));
+            let mut cloned_node = new_node.clone();
+
+            cloned_node = Node::fetch_serializable_btree(cloned_node);
+
+            println!("{:?}", cloned_node.read().unwrap().print_tree());
+
+        }
+
 
         /// What does push do now? TODO: FIND ITS USE
-/*        "push" => {
+/*        "checkpoint" => {
             if args.len() != 1 {
                 println!("Invalid argument");
                 continue;
