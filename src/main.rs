@@ -1606,6 +1606,48 @@ impl Node {
 
         node
     }
+
+    fn get_uncommitted_transactions(wal_file_path: &str) -> io::Result<Vec<String>> {
+        let mut uncommitted_strings = Vec::new();
+
+        match read_file(wal_file_path) {
+            Ok(metadata) => {
+                match empty_file(wal_file_path) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        println!("File truncation error: {}", e);
+                    }
+                }
+
+                let mut commit_count = 0;
+
+
+                for line in metadata.lines() {
+                    let items = line.replace("\"", "");
+
+                    println!("{:?}", items);
+
+                    if commit_count >= LAST_ACTIVE_TXD.load(Ordering::SeqCst) {
+                        uncommitted_strings.push(items.clone());
+                    }
+                    {
+                        if items.to_lowercase().contains("commit") {
+                            commit_count += 1;
+                        }
+                    }
+
+                }
+
+                println!("Uncommitted strings: {:#?}", uncommitted_strings);
+            }
+            Err(e) => {
+                println!("File read error: {}", e);
+            }
+        }
+
+
+        Ok(uncommitted_strings)
+    }
 }
 
 impl I32OrString {
@@ -1689,7 +1731,7 @@ fn main() -> io::Result<()> {
         Ok(metadata) => {
             for items in metadata.lines() {
                 let items = items.replace("\"", "");
-                match CLI(items, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node)) {
+                match CLI(items, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), wal_file_path) {
                     Ok(_) => {}
                     Err(e) => {
                         println!("WAL recovery error: {}", e);
@@ -1697,12 +1739,12 @@ fn main() -> io::Result<()> {
                 }
             }
 
-            match empty_file(wal_file_path) {
+/*            match empty_file(wal_file_path) {
                 Ok(_) => {}
                 Err(e) => {
                     println!("File truncation error: {}", e);
                 }
-            }
+            }*/
         }
         Err(e) => {
             println!("{}", e);
@@ -1716,7 +1758,7 @@ fn main() -> io::Result<()> {
 
         match io::stdin().read_line(&mut cli_input) {
             Ok(_) => {
-                match CLI(cli_input, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node)) {
+                match CLI(cli_input, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), wal_file_path) {
                     Ok(1) => { continue; }
                     Ok(2) => {break;}
                     Ok(_) => {}
@@ -1752,7 +1794,7 @@ fn something(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path:
     returned_node
 }
 
-fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>,new_node: Arc<RwLock<Node>>  ) -> io::Result<(u8)> {
+fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>,new_node: Arc<RwLock<Node>>, wal_file_path: &str  ) -> io::Result<(u8)> {
     let cli_input = cli_input.trim();
 
     if cli_input.is_empty() {
@@ -1994,7 +2036,6 @@ fn read_file(file_path: &str) -> io::Result<String> {
 }
 
 fn empty_file(file_path: &str) -> io::Result<()> {
-    println!("{:?}", file_path);
     let mut file = OpenOptions::new()
         .write(true)
         .truncate(true)
@@ -2006,17 +2047,14 @@ fn empty_file(file_path: &str) -> io::Result<()> {
 }
 
 impl Node {
-    /// Pretty print the entire tree starting from this node
     pub fn print_tree(&self) {
         self.print_tree_recursive("", true, 0, None);
     }
 
-    /// Pretty print the tree with transaction visibility
     pub fn print_tree_for_transaction(&self, tx_id: u32) {
         self.print_tree_recursive("", true, 0, Some(tx_id));
     }
 
-    /// Recursive helper for tree printing
     fn print_tree_recursive(&self, prefix: &str, is_last: bool, depth: usize, tx_id: Option<u32>) {
         // Print current node
         let connector = if depth == 0 {
