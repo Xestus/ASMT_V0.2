@@ -1570,7 +1570,7 @@ impl Node {
                 let mut to_be_removed = Vec::new();
                 for i in 0..input.version.len() {
                     if let Some(xmax) = input.version[i].xmax {
-                        if xmax >= xmax_threshold {
+                        if xmax > xmax_threshold {
                             input.version[i].xmax = None;
                         }
                     }
@@ -1908,10 +1908,40 @@ fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
                 return Ok(1);
             }
 
-            // println!("{:?}", LAST_ACTIVE_TXD.load(Ordering::SeqCst));
             let mut cloned_node = new_node.clone();
 
             cloned_node = Node::fetch_serializable_btree(cloned_node);
+
+            match Node::serialize(Arc::clone(&cloned_node)) {
+                Ok(_) => {}
+                Err(e) => {
+                    println!("Serialization failed: {}", e);
+                }
+            }
+
+            match Node::get_uncommitted_transactions(wal_file_path) {
+                Ok(uncommitted_strings) => {
+                    match empty_file(wal_file_path) {
+                        Ok(_) => {
+                            for strs in uncommitted_strings.iter() {
+                                let uncommitted_args = strs.split(" ").collect::<Vec<&str>>();
+                                match Node::flush_to_wal(Arc::clone(&file),uncommitted_args) {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        println!("Flushing to WAL failed: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            println!("WAL truncation error: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("Can't fetch uncommitted transactions: {}", e);
+                }
+            }
 
             println!("{:?}", cloned_node.read().unwrap().print_tree());
 
