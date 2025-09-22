@@ -1,23 +1,23 @@
-use std::cell::RefCell;
 use crate::rand::Rng;
+use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
 extern crate rand;
-use std::fs::File;
-use std::{env, fs, io};
-use std::collections::HashMap;
-use std::sync::{mpsc, Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use crate::ValVer::{ValueVariant, VersionVariant};
+use clap::{Parser, Subcommand};
 use once_cell::sync::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::rc::Rc;
 use regex::Regex;
-use std::fs:: OpenOptions;
+use std::collections::HashMap;
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom};
 use std::mem::zeroed;
 use std::path::Path;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
 use std::thread;
 use std::time::Duration;
-use clap::{Parser, Subcommand};
-use crate::ValVer::{ValueVariant, VersionVariant};
+use std::{env, fs, io};
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
 static LAST_ACTIVE_TXD: AtomicUsize = AtomicUsize::new(100);
@@ -40,7 +40,7 @@ enum ValVer {
 struct Items {
     key: u32,
     rank: u32,
-    version: Vec<Version>
+    version: Vec<Version>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +51,11 @@ struct Node {
 }
 
 #[derive(Debug, Clone, PartialEq, Ord, PartialOrd, Eq, Hash)]
-enum TransactionStatus { Active, Committed, Aborted, }
+enum TransactionStatus {
+    Active,
+    Committed,
+    Aborted,
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Transaction {
     status: HashMap<u32, TransactionStatus>,
@@ -75,7 +79,6 @@ struct UltraDeserialized {
 }
 
 impl Node {
-
     /// The function creates a new empty node for a B-tree during initialization and operations such as splitting.
     /// The default value of field `rank` is 1 as:
     /// - A new B-Tree always starts with an empty Node with `rank: 1`.
@@ -101,17 +104,28 @@ impl Node {
     // Todo: Understand why i had to call every function 3 times for correct functioning.
     fn insert(mut self_node: Arc<RwLock<Node>>, k: u32, v: String, txn: u32) -> io::Result<()> {
         {
-            let ver = Version {value: v.clone(), xmin: txn, xmax: None};
+            let ver = Version {
+                value: v.clone(),
+                xmin: txn,
+                xmax: None,
+            };
 
             match Node::find_and_update_key_version(Arc::clone(&self_node), k, Some(v), txn) {
                 Some(_) => {
                     println!("Key already exists");
                     return Ok(());
-                },
+                }
                 None => {
                     println!("New version");
-                    let version = vec!(ver.clone());
-                    Node::add_new_keys(Arc::clone(&self_node), Items { key: k, rank: 1, version });
+                    let version = vec![ver.clone()];
+                    Node::add_new_keys(
+                        Arc::clone(&self_node),
+                        Items {
+                            key: k,
+                            rank: 1,
+                            version,
+                        },
+                    );
                 }
             }
         }
@@ -122,7 +136,6 @@ impl Node {
         self_node = Node::sort_children_nodes(self_node);
 
         self_node = Node::tree_integrity_check(self_node);
-
 
         self_node = Node::min_size_check(self_node);
 
@@ -146,7 +159,7 @@ impl Node {
     /// # THIS IS A TEMPORARY HACK SOLUTION. IT'LL STAY THERE TILL I ADD AN ACTUAL THREAD SAFE FUNCTION.
     /// ## DO NOT TAKE THIS SERIOUSLY.
     /// ### :(
-    fn find_and_update_key_version(node: Arc<RwLock<Node>>, key: u32, v: Option<String>, txn: u32) -> Option<()> {
+    fn find_and_update_key_version(node: Arc<RwLock<Node>>, key: u32, v: Option<String>, txn: u32, ) -> Option<()> {
         let mut write_guard = {
             let w1 = node.write();
             w1.unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -157,7 +170,11 @@ impl Node {
                 write_guard.input[i].version[ver_count - 1].xmax = Option::from(txn);
 
                 if let Some(value) = v {
-                    let ver = Version {value, xmin: txn, xmax: None};
+                    let ver = Version {
+                        value,
+                        xmin: txn,
+                        xmax: None,
+                    };
                     write_guard.input[i].version.push(ver);
                 }
                 return Some(());
@@ -166,19 +183,18 @@ impl Node {
         drop(write_guard);
         let read_guard = node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
         if !read_guard.children.is_empty() {
-
             if key < read_guard.input[0].key {
                 let guard = Arc::clone(&read_guard.children[0]);
                 drop(read_guard);
                 return Node::find_and_update_key_version(guard, key, v, txn);
-            } else if key > read_guard.input[read_guard.input.len()-1].key {
+            } else if key > read_guard.input[read_guard.input.len() - 1].key {
                 let guard = Arc::clone(&read_guard.children.last().unwrap());
                 drop(read_guard);
                 return Node::find_and_update_key_version(guard, key, v, txn);
             } else {
                 for i in 0..read_guard.input.len() - 1 {
-                    if key > read_guard.input[i].key && key < read_guard.input[i+1].key {
-                        let guard = Arc::clone(&read_guard.children[i+1]);
+                    if key > read_guard.input[i].key && key < read_guard.input[i + 1].key {
+                        let guard = Arc::clone(&read_guard.children[i + 1]);
                         drop(read_guard);
                         return Node::find_and_update_key_version(guard, key, v, txn);
                     }
@@ -194,9 +210,9 @@ impl Node {
     ///
     /// The function is expected to be called right and only after insertion.
     ///
-    /// Panics if: 
-    /// - static `NODE_SIZE` is uninitialized. 
-    /// - The children mutex is poisoned when used as recursive functional parameter. 
+    /// Panics if:
+    /// - static `NODE_SIZE` is uninitialized.
+    /// - The children mutex is poisoned when used as recursive functional parameter.
     /// But both the `.unwrap()` are safe, I think.
     ///
     /// - MutexGuard<Node> was used as both return and parameter because it allows reuse during recursion without relocking.
@@ -221,14 +237,13 @@ impl Node {
 
             if current_read.input.len() > *NODE_SIZE.get().unwrap() {
                 drop(current_read);
-                let _unused =  Node::split_nodes(current_clone);
+                let _unused = Node::split_nodes(current_clone);
             } else if !current_read.children.is_empty() {
                 let current_children = &current_read.children;
                 for child in current_children {
                     stack.push(Arc::clone(child));
                 }
             }
-
         }
 
         drop(root_read);
@@ -247,7 +262,7 @@ impl Node {
     ///
     ///
     /// The nodes containing the smaller and larger keys will always have their rank as one more than their parent (Node with middle key).
-    /// The field `rank` is modified twice, inside and after the loop because two struct containing field `rank`, 
+    /// The field `rank` is modified twice, inside and after the loop because two struct containing field `rank`,
     /// Rank field of:
     /// - struct `Node` represents the rank of the Node that contains explicit number of keys.
     /// - struct `Items` represents rank of the individual key/value.
@@ -262,25 +277,35 @@ impl Node {
     ///
     fn split_nodes(mut self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
         self_node = Node::sort_main_nodes(self_node);
-        let mut self_instance = self_node.write().unwrap_or_else(|e| e.into_inner());      // Mutable instance of self_node.
+        let mut self_instance = self_node.write().unwrap_or_else(|e| e.into_inner()); // Mutable instance of self_node.
 
         let struct_one = Node::new(); // Holds keys smaller than middle key.
         let struct_two = Node::new(); // Holds keys larger than middle key.
 
         let items_size = self_instance.input.len();
-        let breaking_point = (items_size + 1)/2;
+        let breaking_point = (items_size + 1) / 2;
         let temp_storage = self_instance.clone();
         let mut i = 0;
         self_instance.input.clear();
         for count in 1..temp_storage.input.len() + 1 {
             if count == breaking_point {
-                self_instance.input.push(temp_storage.input[count-1].clone()); // Push the middle `Item` as sole parent.
+                self_instance
+                    .input
+                    .push(temp_storage.input[count - 1].clone()); // Push the middle `Item` as sole parent.
             } else if count < breaking_point {
-                struct_one.write().unwrap().input.push(temp_storage.input[count-1].clone()); // Push the `Items` with keys smaller than middle key onto struct_one.
+                struct_one
+                    .write()
+                    .unwrap()
+                    .input
+                    .push(temp_storage.input[count - 1].clone()); // Push the `Items` with keys smaller than middle key onto struct_one.
                 struct_one.write().unwrap().input[count - 1].rank = temp_storage.rank + 1; // Set the key rank as parent node's rank + 1.
             } else if count > breaking_point {
                 i = i + 1; // Variable "i" was used instead of count because `i` denotes the number of keys in struct_two.
-                struct_two.write().unwrap().input.push(temp_storage.input[count - 1].clone()); // Push the `Items` with keys larger than middle key onto struct_two.
+                struct_two
+                    .write()
+                    .unwrap()
+                    .input
+                    .push(temp_storage.input[count - 1].clone()); // Push the `Items` with keys larger than middle key onto struct_two.
                 struct_two.write().unwrap().input[i - 1].rank = temp_storage.rank + 1; // Set their key rank as parent node's rank + 1.
             }
         }
@@ -288,7 +313,6 @@ impl Node {
         // Set struct_one/two's node rank as parent's node rank + 1.
         struct_one.write().unwrap().rank = self_instance.rank + 1;
         struct_two.write().unwrap().rank = self_instance.rank + 1;
-
 
         self_instance.children.push(struct_one);
         self_instance.children.push(struct_two);
@@ -326,9 +350,13 @@ impl Node {
     fn tree_integrity_check(self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
         let mut stack = Vec::new();
 
-        let self_instance = self_node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let self_instance = self_node
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        if self_instance.input.len() + 1 != self_instance.children.len() && !self_instance.children.is_empty() {
+        if self_instance.input.len() + 1 != self_instance.children.len()
+            && !self_instance.children.is_empty()
+        {
             drop(self_instance);
             return Node::fix_child_count_mismatch(self_node);
         }
@@ -341,7 +369,9 @@ impl Node {
         while let Some(node) = stack.pop() {
             let current_clone = Arc::clone(&node);
             let current_instance = node.read().unwrap_or_else(|poisoned| poisoned.into_inner());
-            if current_instance.input.len() + 1 != current_instance.children.len() && !current_instance.children.is_empty() {
+            if current_instance.input.len() + 1 != current_instance.children.len()
+                && !current_instance.children.is_empty()
+            {
                 drop(current_instance);
                 let _unused = Node::fix_child_count_mismatch(current_clone);
             } else if !current_instance.children.is_empty() {
@@ -364,15 +394,15 @@ impl Node {
     ///  it causes the node to split, forcing its non-middle key to be added as two children.
     ///
     /// The first double for loop iteration is used to compare the first and the last keys of every node with the other to discover and place overlapping node
-    /// (Node whose first key subceeds and last key exceeds at least one other node's first key and last key respectively) on the last 2 indices where the 
-    /// overlapping nodes are to be used as parent nodes for the rest of the children. 
+    /// (Node whose first key subceeds and last key exceeds at least one other node's first key and last key respectively) on the last 2 indices where the
+    /// overlapping nodes are to be used as parent nodes for the rest of the children.
     ///
     /// It's a temporary brute-force solution with some unnecessary cloning.
-    /// `Naïve O(N²)` algorithm *is* inefficient in comparison to `O(N Log N)` but is used as a placeholder to be replaced with (maybe) Sweep Line Algorithm. 
+    /// `Naïve O(N²)` algorithm *is* inefficient in comparison to `O(N Log N)` but is used as a placeholder to be replaced with (maybe) Sweep Line Algorithm.
     ///
     /// Its tolerable now as the maximum number of keys per node is relatively small.
     ///
-    /// The last 2 overlapping nodes are sorted by first key on ascending order by preloading the keys to `key_nodes`, sorting them and placing them back 
+    /// The last 2 overlapping nodes are sorted by first key on ascending order by preloading the keys to `key_nodes`, sorting them and placing them back
     /// to original child node which prevents deadlocking during sorting.
     ///
     /// Only the last 2 children are sorted because the last two children are assumed to be the new parent for rest of the children.
@@ -384,15 +414,15 @@ impl Node {
     ///
     /// .
     ///
-    /// Before (invalid):  
-    /// ```text  
-    ///                                [754]  
-    ///    -----------------------------|---------------------------  
-    ///   /       |         |           |          |        |        \  
-    /// [7,9] [410,480] [615,627] [786,809] [847,879] [940,942] [365,577] [839,881]  
-    /// ```  
-    /// After (valid):  
-    /// ```text  
+    /// Before (invalid):
+    /// ```text
+    ///                                [754]
+    ///    -----------------------------|---------------------------
+    ///   /       |         |           |          |        |        \
+    /// [7,9] [410,480] [615,627] [786,809] [847,879] [940,942] [365,577] [839,881]
+    /// ```
+    /// After (valid):
+    /// ```text
     ///                                      [754]
     ///                        /---------------╨-----------\
     ///                       /                             \
@@ -408,29 +438,36 @@ impl Node {
     /// - Implement safe locking with error handling (replace `unwrap_or_else`).
     /// - Add poison propagation in case of locking errors.
     fn fix_child_count_mismatch(self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
-        let mut self_instance = self_node.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut self_instance = self_node
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let child_len = self_instance.children.len();
 
         for i in 0..child_len {
             // The children cannot be empty as only the nodes with children not empty can invoke the function (!self_instance.children.is_empty())
             let some_val = self_instance.children[i].read().unwrap().clone();
             let some_val_input = &some_val.input;
-            let keys_primary_required = vec![some_val_input[0].key, some_val_input.last().unwrap().key];
+            let keys_primary_required =
+                vec![some_val_input[0].key, some_val_input.last().unwrap().key];
             for j in 0..child_len {
                 let some_other_val = self_instance.children[j].read().unwrap().clone();
                 let some_other_val_input = &some_other_val.input;
-                let keys_secondary_required = vec![some_other_val_input[0].key, some_other_val_input.last().unwrap().key];
+                let keys_secondary_required = vec![
+                    some_other_val_input[0].key,
+                    some_other_val_input.last().unwrap().key,
+                ];
 
                 // Checks for overlapping node.
-                if keys_primary_required[0] < keys_secondary_required[0] && keys_primary_required[1] > keys_secondary_required[1] {
+                if keys_primary_required[0] < keys_secondary_required[0]
+                    && keys_primary_required[1] > keys_secondary_required[1]
+                {
                     let k = Arc::new(RwLock::new(some_val));
                     self_instance.children.push(k); // Pushes the overlapping node to the last index.
                     self_instance.children.remove(i); // Removes the unnecessary overlapping node.
-                    break
+                    break;
                 }
             }
         }
-
 
         let len = self_instance.children.len();
         if len >= 2 {
@@ -454,14 +491,17 @@ impl Node {
         let mut parent_one_child_boundary = Vec::new();
         let mut parent_two_child_boundary = Vec::new();
 
-        // Snippet placed inside a code block because `guard_parent_one` and `guard_parent_two` takes an immutable reference. 
+        // Snippet placed inside a code block because `guard_parent_one` and `guard_parent_two` takes an immutable reference.
         {
-            let guard_parent_one = self_instance.children[self_instance.children.len() - 2].read().unwrap_or_else(|p| p.into_inner());
-            let guard_parent_two = self_instance.children[self_instance.children.len() - 1].read().unwrap_or_else(|p| p.into_inner());
+            let guard_parent_one = self_instance.children[self_instance.children.len() - 2]
+                .read()
+                .unwrap_or_else(|p| p.into_inner());
+            let guard_parent_two = self_instance.children[self_instance.children.len() - 1]
+                .read()
+                .unwrap_or_else(|p| p.into_inner());
 
             let new_parent_one_length = guard_parent_one.input.len();
             let new_parent_two_length = guard_parent_two.input.len();
-
 
             let guards = [&guard_parent_one, &guard_parent_two];
 
@@ -480,8 +520,11 @@ impl Node {
                     placeholder = vec![self_instance.input.last().unwrap().key, u32::MAX]
                 } else {
                     for j in 0..self_instance.input.len() - 1 {
-                        if require_child[0] > self_instance.input[j].key && require_child[1] < self_instance.input[j + 1].key {
-                            placeholder = vec![self_instance.input[j].key, self_instance.input[j + 1].key]
+                        if require_child[0] > self_instance.input[j].key
+                            && require_child[1] < self_instance.input[j + 1].key
+                        {
+                            placeholder =
+                                vec![self_instance.input[j].key, self_instance.input[j + 1].key]
                         }
                     }
                 }
@@ -495,14 +538,26 @@ impl Node {
         }
         let mut j = 0;
 
-        // Remove the selected `Items` from child of selected node to its grandchild. 
+        // Remove the selected `Items` from child of selected node to its grandchild.
         for _i in 0..self_instance.children.len() - 2 {
             let k = self_instance.children[j].read().unwrap().clone();
-            if k.input[0].key > parent_one_child_boundary[0] && k.input[k.input.len() - 1].key < parent_one_child_boundary[1] {
-                self_instance.children[self_instance.children.len()-2].write().unwrap().children.push(Arc::new(RwLock::new(k)));
+            if k.input[0].key > parent_one_child_boundary[0]
+                && k.input[k.input.len() - 1].key < parent_one_child_boundary[1]
+            {
+                self_instance.children[self_instance.children.len() - 2]
+                    .write()
+                    .unwrap()
+                    .children
+                    .push(Arc::new(RwLock::new(k)));
                 self_instance.children.remove(j);
-            } else if k.input[0].key > parent_two_child_boundary[0] && k.input[k.input.len() - 1].key < parent_two_child_boundary[1] {
-                self_instance.children[self_instance.children.len()-1].write().unwrap().children.push(Arc::new(RwLock::new(k)));
+            } else if k.input[0].key > parent_two_child_boundary[0]
+                && k.input[k.input.len() - 1].key < parent_two_child_boundary[1]
+            {
+                self_instance.children[self_instance.children.len() - 1]
+                    .write()
+                    .unwrap()
+                    .children
+                    .push(Arc::new(RwLock::new(k)));
                 self_instance.children.remove(j);
             } else {
                 j += 1;
@@ -542,7 +597,7 @@ impl Node {
         self_node
     }
 
-    fn add_new_keys(self_node : Arc<RwLock<Node>>, mut x: Items){
+    fn add_new_keys(self_node: Arc<RwLock<Node>>, mut x: Items) {
         let self_instance = &mut self_node.write().unwrap();
         if self_instance.children.is_empty() {
             self_instance.input.push(x.clone());
@@ -554,18 +609,25 @@ impl Node {
                     x.rank = self_instance.input[0].rank;
                     self_instance.input.push(x);
                 }
-            } else if x.key > self_instance.input[self_instance.input.len()-1].key {
+            } else if x.key > self_instance.input[self_instance.input.len() - 1].key {
                 if !self_instance.children.is_empty() {
-                    Node::add_new_keys(Arc::clone(&self_instance.children[self_instance.children.len()-1]), x);
+                    Node::add_new_keys(
+                        Arc::clone(&self_instance.children[self_instance.children.len() - 1]),
+                        x,
+                    );
                 } else {
                     x.rank = self_instance.input[0].rank;
                     self_instance.input.push(x);
                 }
             } else {
                 for i in 0..self_instance.input.len() - 1 {
-                    if x.key > self_instance.input[i].key && x.key < self_instance.input[i+1].key {
+                    if x.key > self_instance.input[i].key && x.key < self_instance.input[i + 1].key
+                    {
                         if !self_instance.children.is_empty() {
-                            Node::add_new_keys(Arc::clone(&self_instance.children[i+1]), x.clone());
+                            Node::add_new_keys(
+                                Arc::clone(&self_instance.children[i + 1]),
+                                x.clone(),
+                            );
                         } else {
                             x.rank = self_instance.input[0].rank;
                             self_instance.input.push(x.clone());
@@ -639,7 +701,6 @@ impl Node {
 
         drop(read_guard);
         self_node
-
     }
 
     /// Private function invoked from [`Node::min_size_check`], ensures all node meet the B-Tree invariant of `input.len() >= NODE_SIZE`.
@@ -706,7 +767,7 @@ impl Node {
     /// - Replace [`Result::unwrap_or_else`] with `safe_lock<T>`
     /// - Propagate poisoning via `Result<MutexGuard<T>, TreeError>`.
     ///
-    fn propagate_up(mut self_node: Arc<RwLock<Node>>,child: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
+    fn propagate_up(mut self_node: Arc<RwLock<Node>>, child: Arc<RwLock<Node>>, ) -> Arc<RwLock<Node>> {
         let self_read = self_node.read().unwrap();
         let mut child_write = child.write().unwrap();
 
@@ -745,13 +806,17 @@ impl Node {
 
     fn sort_children_nodes(self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
         let mut self_write = self_node.write().unwrap();
-        self_write.children.sort_by(|a, b| {a.read().unwrap().input[0].key.cmp(&b.read().unwrap().input[0].key)});
+        self_write.children.sort_by(|a, b| {
+            a.read().unwrap().input[0]
+                .key
+                .cmp(&b.read().unwrap().input[0].key)
+        });
         drop(self_write);
         self_node
     }
     fn sort_main_nodes(self_node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
         let mut self_write = self_node.write().unwrap();
-        self_write.input.sort_by(|a, b| {a.key.cmp(&b.key)});
+        self_write.input.sort_by(|a, b| a.key.cmp(&b.key));
         drop(self_write);
         self_node
     }
@@ -786,9 +851,9 @@ impl Node {
     ///
     /// # Condition:
     /// - Every key is sorted by ascending as [`Node::sort_everything`] is invoked before invoking [`Node::key_position`].
-    /// - Nodes are locked depth first, left to right. 
+    /// - Nodes are locked depth first, left to right.
     /// - [`std::sync::PoisonError`] is a plausible error, handled temporarily by [`Result::unwrap_or_else`] assuming no corruption has occurred.
-    /// - [`Rc<RefCell<T>>`] isn't preferred because they're not for concurrent access across multiple threads. 
+    /// - [`Rc<RefCell<T>>`] isn't preferred because they're not for concurrent access across multiple threads.
     /// - Root, Branch and Internal nodes, all of them will provide a valid result.
     ///
     /// # Examples
@@ -808,7 +873,7 @@ impl Node {
     ///
     /// # TODO + WARNING:
     /// - THE SYSTEM CURRENTLY ISN'T CONCURRENT BUT IS CONCURRENCY IS THE NEXT FEATURE TO BE ADDED AFTER WRITE AHEAD LOGIN. PLEASE FORGIVE ME.
-    /// - CASES WITH READER/WRITER COLLISION WILL BE HANDLED WITH REPLACEMENT OF MUTEX WITH RWLOCK, DEPENDING UPON NEED. 
+    /// - CASES WITH READER/WRITER COLLISION WILL BE HANDLED WITH REPLACEMENT OF MUTEX WITH RWLOCK, DEPENDING UPON NEED.
     fn key_position(node: Arc<RwLock<Node>>, key: u32) -> Option<Vec<Version>> {
         let mut stack = Vec::new();
         stack.push(node);
@@ -825,12 +890,12 @@ impl Node {
             if !current.children.is_empty() {
                 if key < current.input[0].key {
                     stack.push(Arc::clone(&current.children[0]));
-                } else if key > current.input[current.input.len()-1].key {
-                    stack.push(Arc::clone(&current.children[current.children.len()-1]));
+                } else if key > current.input[current.input.len() - 1].key {
+                    stack.push(Arc::clone(&current.children[current.children.len() - 1]));
                 } else {
                     for i in 0..current.input.len() - 1 {
-                        if key > current.input[i].key && key < current.input[i+1].key {
-                            stack.push(Arc::clone(&current.children[i+1]));
+                        if key > current.input[i].key && key < current.input[i + 1].key {
+                            stack.push(Arc::clone(&current.children[i + 1]));
                         }
                     }
                 }
@@ -859,21 +924,20 @@ impl Node {
             if key < x.input[0].key {
                 let cloned = Arc::clone(&x.children[0]);
                 return Node::remove_key_extension(cloned, key);
-
-            } else if key > x.input[x.input.len()-1].key {
+            } else if key > x.input[x.input.len() - 1].key {
                 let cloned = Arc::clone(&x.children.last().unwrap());
                 return Node::remove_key_extension(cloned, key);
             } else {
                 for i in 0..x.input.len() - 1 {
-                    if key > x.input[i].key && key < x.input[i+1].key {
-                        let cloned = Arc::clone(&x.children[i+1]);
+                    if key > x.input[i].key && key < x.input[i + 1].key {
+                        let cloned = Arc::clone(&x.children[i + 1]);
                         return Node::remove_key_extension(cloned, key);
                     }
                 }
             }
         }
     }
-    fn removed_node_check (mut self_node: Arc<RwLock<Node>>) {
+    fn removed_node_check(mut self_node: Arc<RwLock<Node>>) {
         let read_guard = self_node.read().unwrap();
 
         let mut indices_to_propagate = Vec::new();
@@ -899,7 +963,6 @@ impl Node {
                 Node::removed_node_check(child.clone());
             }
         }
-
     }
     fn parent_key_down(self_node: Arc<RwLock<Node>>, idx: usize) -> Arc<RwLock<Node>> {
         struct Value {
@@ -927,7 +990,10 @@ impl Node {
                 } else {
                     k = i - idx;
                 }
-                index_vector_position.push(Value{difference: k, index: i});
+                index_vector_position.push(Value {
+                    difference: k,
+                    index: i,
+                });
                 index_vector.push(i);
             }
         }
@@ -1023,11 +1089,11 @@ impl Node {
 
             let m = self_guard.input[idx2].clone();
 
-            let (k,len) = {
+            let (k, len) = {
                 let child_guard = self_guard.children[idx2].read().unwrap();
                 let a = child_guard.input.len();
                 let b = child_guard.input[a - 1].clone();
-                (b,a)
+                (b, a)
             };
             self_guard.input.remove(idx2);
             self_guard.input.push(k);
@@ -1050,10 +1116,10 @@ impl Node {
         if length < *NODE_SIZE.get().unwrap() / 2 {
             if idx1 < idx2 {
                 let k = Arc::clone(&self_node);
-                Node::moving_keys(k, idx1, idx2-1);
+                Node::moving_keys(k, idx1, idx2 - 1);
             } else if idx1 > idx2 {
                 let k = Arc::clone(&self_node);
-                Node::moving_keys(k, idx1, idx2+1);
+                Node::moving_keys(k, idx1, idx2 + 1);
             }
         }
     }
@@ -1076,11 +1142,14 @@ impl Node {
                 Node::collect_keys_inorder(Arc::clone(&node_instance.children[i]), result);
                 result.push(node_instance.input[i].clone());
             }
-            Node::collect_keys_inorder(Arc::clone(&node_instance.children[node_instance.input.len()]), result);
+            Node::collect_keys_inorder(
+                Arc::clone(&node_instance.children[node_instance.input.len()]),
+                result,
+            );
         }
     }
 
-    fn serialize(node: Arc<RwLock<Node>>) -> io::Result<()>  {
+    fn serialize(node: Arc<RwLock<Node>>) -> io::Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -1113,13 +1182,12 @@ impl Node {
                 }
                 let value_len = ver.value.len();
                 writeln!(file, "[{}]", value_len).expect("panic message");
-                let x : Vec<char> = ver.value.chars().collect();
+                let x: Vec<char> = ver.value.chars().collect();
                 write!(file, "{:?}", x).expect("panic message");
-                writeln!(file,"").expect("panic message");
-
+                writeln!(file, "").expect("panic message");
             }
         }
-        writeln!(file,"[{:X}]", node_instance.children.len()).expect("panic message");
+        writeln!(file, "[{:X}]", node_instance.children.len()).expect("panic message");
         if !node_instance.children.is_empty() {
             for i in 0..node_instance.input.len() + 1 {
                 let z = Arc::clone(&node_instance.children[i]);
@@ -1133,11 +1201,10 @@ impl Node {
         if metadata.len() == 0 {
             return Ok(Node::new());
         } else {
-            println!("{:?}", metadata );
+            println!("{:?}", metadata);
         }
 
         let read = BufReader::new(file);
-
 
         let single_bracket = Regex::new(r"^\[[^\]]+\]$").unwrap();
         let double_bracket = Regex::new(r"^\[[^\]]+\]\[[^\]]+\]$").unwrap();
@@ -1158,9 +1225,10 @@ impl Node {
                     .collect();
 
                 vec.push(I32OrString::Str(result));
-            }
-
-            else if single_bracket.is_match(k) || double_bracket.is_match(k) || triple_bracket.is_match(k) {
+            } else if single_bracket.is_match(k)
+                || double_bracket.is_match(k)
+                || triple_bracket.is_match(k)
+            {
                 let chars: Vec<char> = k.chars().collect();
                 let mut numbers = Vec::new();
                 let mut current_num = String::new();
@@ -1174,13 +1242,18 @@ impl Node {
                                 if current_num == "-" {
                                     numbers.push(-1);
                                 } else {
-                                    numbers.push(current_num.parse::<i32>().expect("Error parsing number"));
+                                    numbers.push(
+                                        current_num.parse::<i32>().expect("Error parsing number"),
+                                    );
                                 }
                                 current_num.clear();
                             }
                             inside_brackets = false;
                         }
-                        digit if digit.is_ascii_digit() && inside_brackets || inside_brackets && digit == '-' => {
+                        digit
+                            if digit.is_ascii_digit() && inside_brackets
+                                || inside_brackets && digit == '-' =>
+                        {
                             current_num.push(digit);
                         }
                         _ => {}
@@ -1201,8 +1274,8 @@ impl Node {
         }
 
         /*        for item in vec.iter() {
-                    println!("{:?}", item);
-                }*/
+            println!("{:?}", item);
+        }*/
         let vector_len = vec.len();
         let mut count = 0;
         let mut no_of_keys_in_node = 0;
@@ -1235,12 +1308,24 @@ impl Node {
             // println!("version_of_single_key: {:?}", version_of_single_key);
             // println!("number_of_keys_inspected: {:?}", number_of_keys_inspected);
             // println!("--------------------------------------------------");
-            if count == (3 + 5 * version_of_all_keys_in_same_node + no_of_keys_in_node + version_and_key_equal) && count != 3 && version_of_all_keys_in_same_node != version_of_single_key  && no_of_keys_in_node > 0 && number_of_keys_inspected == no_of_keys_in_node {
+            if count
+                == (3
+                    + 5 * version_of_all_keys_in_same_node
+                    + no_of_keys_in_node
+                    + version_and_key_equal)
+                && count != 3
+                && version_of_all_keys_in_same_node != version_of_single_key
+                && no_of_keys_in_node > 0
+                && number_of_keys_inspected == no_of_keys_in_node
+            {
                 version_of_all_keys_in_same_node = 0;
                 version_of_single_key = 0;
                 no_of_keys_in_node = 0;
                 no_of_children = vec[i].to_i32().unwrap();
-                vector_deserialized.push(DeserializedNode{ child_count: no_of_children as u32, items: vector_deserialized_items.clone()});
+                vector_deserialized.push(DeserializedNode {
+                    child_count: no_of_children as u32,
+                    items: vector_deserialized_items.clone(),
+                });
                 vector_deserialized_items.clear();
                 count = 1;
                 dec_count_for_versions = -1;
@@ -1255,7 +1340,9 @@ impl Node {
                 version_of_all_keys_in_same_node += version_of_single_key;
                 to_set_version = false;
                 number_of_keys_inspected += 1;
-                if number_of_keys_inspected == no_of_keys_in_node && version_of_all_keys_in_same_node == no_of_keys_in_node {
+                if number_of_keys_inspected == no_of_keys_in_node
+                    && version_of_all_keys_in_same_node == no_of_keys_in_node
+                {
                     version_and_key_equal += 1;
                 }
             }
@@ -1285,28 +1372,35 @@ impl Node {
                 }
 
                 dec_count_for_versions -= 1;
-
             } else if dec_count_for_versions > 0 {
                 dec_count_for_versions -= 1;
             }
             if dec_count_for_versions == 0 {
-                let mut ver_vec:Vec<Version> = Vec::new();
+                let mut ver_vec: Vec<Version> = Vec::new();
                 for j in 0..xmin_vec.len() {
-                    ver_vec.push(Version {value: values_vec[j].clone(), xmin: xmin_vec[j] as u32, xmax: xmax_vec[j]});
+                    ver_vec.push(Version {
+                        value: values_vec[j].clone(),
+                        xmin: xmin_vec[j] as u32,
+                        xmax: xmax_vec[j],
+                    });
                 }
                 values_vec.clear();
                 xmin_vec.clear();
                 xmax_vec.clear();
 
-                vector_deserialized_items.push(Items {key: keys as u32, rank: node_rank as u32, version: ver_vec });
+                vector_deserialized_items.push(Items {
+                    key: keys as u32,
+                    rank: node_rank as u32,
+                    version: ver_vec,
+                });
 
                 // println!("{:?}", vector_deserialized_items);
             }
 
-            if count  == 3  {
+            if count == 3 {
                 // println!("{:?} {:?}", vec[i], vec[i-1]);
                 no_of_keys_in_node = vec[i].to_i32().unwrap();
-                node_rank = vec[i-1].to_i32().unwrap();
+                node_rank = vec[i - 1].to_i32().unwrap();
 
                 dec_count_for_versions = 0;
             }
@@ -1314,9 +1408,12 @@ impl Node {
         // println!("{:?}", vector_deserialized);
 
         println!("===================================");
-        println!("vector_deserialized: {:#?} \n metadata length: {}", vector_deserialized, metadata.len());
+        println!(
+            "vector_deserialized: {:#?} \n metadata length: {}",
+            vector_deserialized,
+            metadata.len()
+        );
         println!("===================================");
-
 
         let required_node = vector_deserialized[0].clone();
         let x = Node::deserialized_with_relation(required_node, &mut vector_deserialized);
@@ -1327,16 +1424,21 @@ impl Node {
         let k = Arc::new(RwLock::new(k));
         // println!("{:?}", k.read().unwrap().print_tree());
         Ok(k)
-
     }
 
-    fn deserialized_with_relation(required_node: DeserializedNode, node_vec:&mut  Vec<DeserializedNode>) -> UltraDeserialized {
-        let mut x = UltraDeserialized {parent: required_node.clone(), children: Vec::new()};
+    fn deserialized_with_relation(required_node: DeserializedNode, node_vec: &mut Vec<DeserializedNode>, ) -> UltraDeserialized {
+        let mut x = UltraDeserialized {
+            parent: required_node.clone(),
+            children: Vec::new(),
+        };
         if required_node.child_count > 0 {
             let mut i = 0;
             while i < node_vec.len() && required_node.child_count > x.children.len() as u32 {
                 if required_node.items[0].rank + 1 == node_vec[i].items[0].rank {
-                    x.children.push(UltraDeserialized {parent: node_vec[i].clone(), children: Vec::new()});
+                    x.children.push(UltraDeserialized {
+                        parent: node_vec[i].clone(),
+                        children: Vec::new(),
+                    });
                     node_vec.remove(i);
                 } else {
                     i += 1;
@@ -1357,8 +1459,7 @@ impl Node {
     }
 
     fn deserialized_duplicate_data_check(mut self_node: Node) -> Node {
-        let dup_child_len = self_node.children.len()/2;
-
+        let dup_child_len = self_node.children.len() / 2;
 
         let mut i = 0;
         while i < self_node.children.len() {
@@ -1391,14 +1492,19 @@ impl Node {
             let x = child_guard.clone();
             drop(child_guard);
             if child_child_len > 0 {
-                self_node.children[i] = Arc::new(RwLock::new(Node::deserialized_duplicate_data_check(x)));
+                self_node.children[i] =
+                    Arc::new(RwLock::new(Node::deserialized_duplicate_data_check(x)));
             }
         }
         self_node
     }
 
     fn deserialized_data_to_nodes(deserialized_data: UltraDeserialized) -> Node {
-        let mut new_node = Node{input: Vec::new(), rank: 0, children: Vec::new()};
+        let mut new_node = Node {
+            input: Vec::new(),
+            rank: 0,
+            children: Vec::new(),
+        };
 
         new_node.input = deserialized_data.parent.items.clone();
         new_node.rank = deserialized_data.parent.items[0].rank;
@@ -1407,7 +1513,9 @@ impl Node {
             let child_len = deserialized_data.children.len();
             let mut child_vec = Vec::new();
             for j in 0..child_len {
-                let k = Arc::new(RwLock::new(Node::deserialized_data_to_nodes(deserialized_data.children[j].clone())));
+                let k = Arc::new(RwLock::new(Node::deserialized_data_to_nodes(
+                    deserialized_data.children[j].clone(),
+                )));
                 child_vec.push(k);
             }
             new_node.children = child_vec;
@@ -1416,7 +1524,7 @@ impl Node {
         new_node
     }
 
-    fn push_to_memory(mut node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str) -> io::Result<(Arc<RwLock<Node>>)> {
+    fn push_to_memory(mut node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str, ) -> io::Result<(Arc<RwLock<Node>>)> {
         let deserialize_result = Node::deserialize(serialized_file_path);
         match deserialize_result {
             Ok(deserialized) => node = deserialized,
@@ -1443,8 +1551,13 @@ impl Node {
             let z = Arc::clone(&node);
             println!("z: {:?}, k: {:?}", z, k);
             let s = Arc::clone(&node);
-            Node::insert(s, i[1].parse().unwrap(), i[2].clone(), i[0].parse().unwrap()).expect("TODO: panic message");
-
+            Node::insert(
+                s,
+                i[1].parse().unwrap(),
+                i[2].clone(),
+                i[0].parse().unwrap(),
+            )
+            .expect("TODO: panic message");
         }
 
         println!("{:?}", node.read().unwrap().print_tree());
@@ -1456,7 +1569,7 @@ impl Node {
                     .truncate(true)
                     .open(wal_file_path)?;
                 file.write_all(b"")?;
-            },
+            }
 
             Err(e) => {
                 println!("{}", e);
@@ -1466,26 +1579,6 @@ impl Node {
         Ok(node)
     }
 
-    /*    fn checkpoint(mut node: Arc<RwLock<Node>>) -> io::Result<()> {
-            let file_path = "/home/_meringue/RustroverProjects/ASMT/WAL.txt";
-    
-            match Node::serialize(Arc::clone(&node)) {
-                Ok(_) => {
-                    let mut file = OpenOptions::new()
-                        .write(true)
-                        .truncate(true)
-                        .open(file_path)?;
-    
-                    file.write_all(b"")?;
-                },
-                Err(e) => {
-                    println!("{}", e);
-                }
-            }
-    
-            Ok(())
-        }*/
-
     fn flush_to_wal(file: Arc<RwLock<File>>, args: Vec<&str>) -> io::Result<()> {
         let args = args.join(" ");
 
@@ -1494,11 +1587,10 @@ impl Node {
         writeln!(file_instance, "{:?}", args).expect("TODO: panic message");
         file_instance.sync_all()?;
 
-
         Ok(())
     }
 
-    fn select_key(node: Arc<RwLock<Node>>, k: u32, txd: u32, status: Arc<RwLock<Transaction>>) -> Option<String> {
+    fn select_key(node: Arc<RwLock<Node>>, k: u32, txd: u32, status: Arc<RwLock<Transaction>>, ) -> Option<String> {
         // HAck: Looks inefficient, redo it later
         let mut result = Vec::new();
         match Node::key_position(node, k) {
@@ -1508,9 +1600,11 @@ impl Node {
             None => {}
         }
         if result.is_empty() {
-            return None
+            return None;
         }
         let status_read_guard = status.read().unwrap();
+
+        let mut selected_keys = Vec::new();
         for i in 0..result.iter().len() {
             let result_max = result[i].xmax;
             let result_min = result[i].xmin;
@@ -1533,11 +1627,14 @@ impl Node {
                             // visible -- xmax == ACTIVE
                         }
                     }
-
                 }
                 None => {
                     visible_xmax = true;
                     // visible -- xmax == None
+
+                    if result_min == txd {
+                        return Some(result[i].value.clone());
+                    }
                 }
             }
 
@@ -1545,16 +1642,21 @@ impl Node {
                 visible_xmin = true;
                 // visible -- min == current_txd_id
             } else if let Some(min_temp_status) = min_status {
-                if let TransactionStatus::Committed = min_temp_status && result_min < txd{
+                if let TransactionStatus::Committed = min_temp_status
+                    && result_min < txd
+                {
                     visible_xmin = true;
                     // visible
                 }
             }
 
-
             if visible_xmax && visible_xmin {
-                return Some(result[i].value.clone());
+                selected_keys.push(result[i].value.clone());
             }
+        }
+
+        if !selected_keys.is_empty() {
+            return Some(selected_keys.last().unwrap().clone());
         }
 
         None
@@ -1621,7 +1723,6 @@ impl Node {
 
                 let mut commit_count = 0;
 
-
                 for line in metadata.lines() {
                     let items = line.replace("\"", "");
 
@@ -1635,16 +1736,12 @@ impl Node {
                             commit_count += 1;
                         }
                     }
-
                 }
-
-                println!("Uncommitted strings: {:#?}", uncommitted_strings);
             }
             Err(e) => {
                 println!("File read error: {}", e);
             }
         }
-
 
         Ok(uncommitted_strings)
     }
@@ -1672,7 +1769,9 @@ fn main() -> io::Result<()> {
     let wal_file_path = "/home/_meringue/RustroverProjects/ASMT/WAL.txt";
     let mut new_node = Node::new();
 
-    let current_transaction = Arc::new(RwLock::new(Transaction{status: HashMap::new()}));
+    let current_transaction = Arc::new(RwLock::new(Transaction {
+        status: HashMap::new(),
+    }));
 
     /*    Node::insert(Arc::clone(&new_node), 1, String::from("Woof"), 1);
         Node::insert(Arc::clone(&new_node), 2, String::from("Woof"), 2);
@@ -1682,7 +1781,7 @@ fn main() -> io::Result<()> {
         Node::insert(Arc::clone(&new_node), 5, String::from("KawKaw"), 7);
         Node::insert(Arc::clone(&new_node), 15, String::from("Quack"), 8);
         Node::insert(Arc::clone(&new_node), 3, String::from("Meow"), 12);
-    
+
         println!("{:?}", new_node.read().unwrap().print_tree());
 
         Node::serialize(Arc::clone(&new_node));
@@ -1715,7 +1814,11 @@ fn main() -> io::Result<()> {
     let (sender, receiver) = mpsc::channel();
     let t1 = thread::spawn(move || {
         while let Ok(_) = rx.recv() {
-            match something(Arc::clone(&cloned_node),serialized_file_path, wal_file_path) {
+            match something(
+                Arc::clone(&cloned_node),
+                serialized_file_path,
+                wal_file_path,
+            ) {
                 Ok(output_node) => {
                     sender.send(output_node).unwrap();
                 }
@@ -1729,22 +1832,43 @@ fn main() -> io::Result<()> {
     // WAL data read
     match read_file(wal_file_path) {
         Ok(metadata) => {
+            let mut uncommitted_strings = Vec::new();
+            let mut load_to_cli = false;
             for items in metadata.lines() {
                 let items = items.replace("\"", "");
-                match CLI(items, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), wal_file_path) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        println!("WAL recovery error: {}", e);
+
+                uncommitted_strings.push(items.clone());
+                if items.to_lowercase().contains("commit") {
+                    load_to_cli = true;
+                }
+
+                if load_to_cli {
+                    for vals in uncommitted_strings.iter() {
+                        match CLI(
+                            vals.clone(),
+                            &mut txd_count,
+                            Arc::clone(&current_transaction),
+                            Arc::clone(&file),
+                            Arc::clone(&new_node),
+                            wal_file_path,
+                        ) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                println!("WAL recovery error: {}", e);
+                            }
+                        }
                     }
+
+                    load_to_cli = false;
                 }
             }
 
-/*            match empty_file(wal_file_path) {
+            match empty_file(wal_file_path) {
                 Ok(_) => {}
                 Err(e) => {
                     println!("File truncation error: {}", e);
                 }
-            }*/
+            }
         }
         Err(e) => {
             println!("{}", e);
@@ -1758,9 +1882,20 @@ fn main() -> io::Result<()> {
 
         match io::stdin().read_line(&mut cli_input) {
             Ok(_) => {
-                match CLI(cli_input, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), wal_file_path) {
-                    Ok(1) => { continue; }
-                    Ok(2) => {break;}
+                match CLI(
+                    cli_input,
+                    &mut txd_count,
+                    Arc::clone(&current_transaction),
+                    Arc::clone(&file),
+                    Arc::clone(&new_node),
+                    wal_file_path,
+                ) {
+                    Ok(1) => {
+                        continue;
+                    }
+                    Ok(2) => {
+                        break;
+                    }
                     Ok(_) => {}
                     Err(e) => {
                         println!("Error: {}", e);
@@ -1776,7 +1911,7 @@ fn main() -> io::Result<()> {
                 }
             }
             Err(e) => {
-                println!("Invalid argument. Error: {:?}",e );;
+                println!("Invalid argument. Error: {:?}", e);
             }
         }
     }
@@ -1786,7 +1921,11 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn something(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str) -> io::Result<Arc<RwLock<Node>>> {
+fn something(
+    node: Arc<RwLock<Node>>,
+    serialized_file_path: &str,
+    wal_file_path: &str,
+) -> io::Result<Arc<RwLock<Node>>> {
     println!("Pushing disk values to in-memory B-Tree");
     let returned_node = Node::push_to_memory(node, serialized_file_path, wal_file_path);
     CHECKPOINT_COUNTER.store(0, Ordering::Relaxed);
@@ -1794,7 +1933,14 @@ fn something(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path:
     returned_node
 }
 
-fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>,new_node: Arc<RwLock<Node>>, wal_file_path: &str  ) -> io::Result<(u8)> {
+fn CLI(
+    cli_input: String,
+    mut txd_count: &mut u32,
+    current_transaction: Arc<RwLock<Transaction>>,
+    file: Arc<RwLock<File>>,
+    new_node: Arc<RwLock<Node>>,
+    wal_file_path: &str,
+) -> io::Result<(u8)> {
     let cli_input = cli_input.trim();
 
     if cli_input.is_empty() {
@@ -1813,12 +1959,15 @@ fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
                 return Ok(1);
             }
 
-
             Node::flush_to_wal(Arc::clone(&file), args)?;
 
             *txd_count += 1;
 
-            current_transaction.write().unwrap().status.insert(*txd_count, TransactionStatus::Active);
+            current_transaction
+                .write()
+                .unwrap()
+                .status
+                .insert(*txd_count, TransactionStatus::Active);
         }
 
         "commit" => {
@@ -1829,7 +1978,11 @@ fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
 
             LAST_ACTIVE_TXD.store(*txd_count as usize, Ordering::SeqCst);
             Node::flush_to_wal(Arc::clone(&file), args)?;
-            current_transaction.write().unwrap().status.insert(*txd_count, TransactionStatus::Committed);
+            current_transaction
+                .write()
+                .unwrap()
+                .status
+                .insert(*txd_count, TransactionStatus::Committed);
         }
 
         "abort" => {
@@ -1840,7 +1993,11 @@ fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
 
             Node::flush_to_wal(Arc::clone(&file), args)?;
 
-            current_transaction.write().unwrap().status.insert(*txd_count, TransactionStatus::Aborted);
+            current_transaction
+                .write()
+                .unwrap()
+                .status
+                .insert(*txd_count, TransactionStatus::Aborted);
         }
 
         "insert" => {
@@ -1867,14 +2024,16 @@ fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
 
             Node::flush_to_wal(Arc::clone(&file), args.clone())?;
 
-
             let key = args[1].parse::<u32>().expect("Invalid argument");
             let value = args[2].parse::<String>().expect("Invalid argument");
 
-            match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), *txd_count) {
-                Some(_) => {
-
-                }
+            match Node::find_and_update_key_version(
+                Arc::clone(&new_node),
+                key,
+                Some(value),
+                *txd_count,
+            ) {
+                Some(_) => {}
                 None => {
                     println!("Key not found");
                 }
@@ -1892,14 +2051,11 @@ fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
             let key = args[1].parse::<u32>().expect("Invalid argument");
 
             match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, *txd_count) {
-                Some(_) => {
-
-                }
+                Some(_) => {}
                 None => {
                     println!("Key not found");
                 }
             }
-
         }
 
         "checkpoint" => {
@@ -1920,36 +2076,32 @@ fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
             }
 
             match Node::get_uncommitted_transactions(wal_file_path) {
-                Ok(uncommitted_strings) => {
-                    match empty_file(wal_file_path) {
-                        Ok(_) => {
-                            for strs in uncommitted_strings.iter() {
-                                let uncommitted_args = strs.split(" ").collect::<Vec<&str>>();
-                                match Node::flush_to_wal(Arc::clone(&file),uncommitted_args) {
-                                    Ok(_) => {}
-                                    Err(e) => {
-                                        println!("Flushing to WAL failed: {}", e);
-                                    }
+                Ok(uncommitted_strings) => match empty_file(wal_file_path) {
+                    Ok(_) => {
+                        for strs in uncommitted_strings.iter() {
+                            let uncommitted_args = strs.split(" ").collect::<Vec<&str>>();
+                            match Node::flush_to_wal(Arc::clone(&file), uncommitted_args) {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    println!("Flushing to WAL failed: {}", e);
                                 }
                             }
                         }
-                        Err(e) => {
-                            println!("WAL truncation error: {}", e);
-                        }
                     }
-                }
+                    Err(e) => {
+                        println!("WAL truncation error: {}", e);
+                    }
+                },
                 Err(e) => {
                     println!("Can't fetch uncommitted transactions: {}", e);
                 }
             }
 
             println!("{:?}", cloned_node.read().unwrap().print_tree());
-
         }
 
-
         /// What does push do now? TODO: FIND ITS USE
-/*        "checkpoint" => {
+        /*        "checkpoint" => {
             if args.len() != 1 {
                 println!("Invalid argument");
                 continue;
@@ -1957,7 +2109,6 @@ fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
             tx.send(1).unwrap();
             new_node = receiver.recv().unwrap();
         }*/
-
         "select" => {
             if args.len() != 2 {
                 println!("Invalid argument");
@@ -1965,7 +2116,12 @@ fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
             }
             let key = args[1].parse::<u32>().expect("Invalid argument");
 
-            match Node::select_key(Arc::clone(&new_node), key, *txd_count, Arc::clone(&current_transaction)) {
+            match Node::select_key(
+                Arc::clone(&new_node),
+                key,
+                *txd_count,
+                Arc::clone(&current_transaction),
+            ) {
                 Some(value) => {
                     println!("Value: {:?}", value);
                 }
@@ -2047,7 +2203,10 @@ fn CLI(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
         }
 
         _ => {
-            println!("Unknown command: {}. Type 'help' for available commands.", args[0]);
+            println!(
+                "Unknown command: {}. Type 'help' for available commands.",
+                args[0]
+            );
         }
     }
 
@@ -2095,11 +2254,13 @@ impl Node {
             "├── "
         };
 
-        println!("{}{}Node(rank: {}) [{}]",
-                 prefix,
-                 connector,
-                 self.rank,
-                 self.format_items(tx_id));
+        println!(
+            "{}{}Node(rank: {}) [{}]",
+            prefix,
+            connector,
+            self.rank,
+            self.format_items(tx_id)
+        );
 
         // Prepare prefix for children
         let child_prefix = if depth == 0 {
@@ -2117,9 +2278,15 @@ impl Node {
                     child.print_tree_recursive(&child_prefix, is_last_child, depth + 1, tx_id);
                 }
                 Err(_) => {
-                    println!("{}{}[POISONED RWLOCK]",
-                             child_prefix,
-                             if is_last_child { "└── " } else { "├── " });
+                    println!(
+                        "{}{}[POISONED RWLOCK]",
+                        child_prefix,
+                        if is_last_child {
+                            "└── "
+                        } else {
+                            "├── "
+                        }
+                    );
                 }
             }
         }
@@ -2130,7 +2297,8 @@ impl Node {
             return "empty".to_string();
         }
 
-        let items: Vec<String> = self.input
+        let items: Vec<String> = self
+            .input
             .iter()
             .map(|item| {
                 let visible_versions = if let Some(tx) = tx_id {
@@ -2175,10 +2343,7 @@ impl Node {
         }
 
         // Get the most recent visible version
-        let latest_version = visible_versions
-            .iter()
-            .max_by_key(|v| v.xmin)
-            .unwrap();
+        let latest_version = visible_versions.iter().max_by_key(|v| v.xmin).unwrap();
 
         format!("{}", latest_version.value)
     }
@@ -2197,19 +2362,23 @@ impl Node {
 
     /// Compact view for specific transaction
     pub fn print_compact_for_transaction(&self, tx_id: Option<u32>) {
-        println!("B-Tree Structure{}:",
-                 tx_id.map(|tx| format!(" (TX: {})", tx)).unwrap_or_default());
+        println!(
+            "B-Tree Structure{}:",
+            tx_id.map(|tx| format!(" (TX: {})", tx)).unwrap_or_default()
+        );
         println!("{}", "=".repeat(50));
         self.print_compact_recursive(0, tx_id);
     }
 
     fn print_compact_recursive(&self, level: usize, tx_id: Option<u32>) {
         let indent = "  ".repeat(level);
-        println!("{}Level {}: [{}] (rank: {})",
-                 indent,
-                 level,
-                 self.format_items(tx_id),
-                 self.rank);
+        println!(
+            "{}Level {}: [{}] (rank: {})",
+            indent,
+            level,
+            self.format_items(tx_id),
+            self.rank
+        );
 
         for (i, child_arc) in self.children.iter().enumerate() {
             match child_arc.read() {
@@ -2234,8 +2403,10 @@ impl Node {
     /// Tree statistics for specific transaction
     pub fn print_stats_for_transaction(&self, tx_id: Option<u32>) {
         let stats = self.calculate_stats(tx_id);
-        println!("Tree Statistics{}:",
-                 tx_id.map(|tx| format!(" (TX: {})", tx)).unwrap_or_default());
+        println!(
+            "Tree Statistics{}:",
+            tx_id.map(|tx| format!(" (TX: {})", tx)).unwrap_or_default()
+        );
         println!("├── Total nodes: {}", stats.total_nodes);
         println!("├── Tree height: {}", stats.height);
         println!("├── Total keys: {}", stats.total_keys);
@@ -2260,9 +2431,8 @@ impl Node {
         for item in &self.input {
             stats.total_versions += item.version.len();
             if let Some(tx) = tx_id {
-                let has_visible_version = item.version
-                    .iter()
-                    .any(|v| self.is_version_visible(v, tx));
+                let has_visible_version =
+                    item.version.iter().any(|v| self.is_version_visible(v, tx));
                 if has_visible_version {
                     stats.visible_keys += 1;
                 }
@@ -2315,7 +2485,10 @@ impl Node {
                 "├── "
             };
 
-            println!("{}{}Key {}: (rank: {})", child_prefix, item_connector, item.key, item.rank);
+            println!(
+                "{}{}Key {}: (rank: {})",
+                child_prefix, item_connector, item.key, item.rank
+            );
 
             for (v_idx, version) in item.version.iter().enumerate() {
                 let version_connector = if v_idx == item.version.len() - 1 {
@@ -2328,9 +2501,10 @@ impl Node {
                     Some(xmax) => format!("{}", xmax),
                     None => "∞".to_string(),
                 };
-                println!("{}{}\"{}\" [TX {}-{}]",
-                         child_prefix, version_connector,
-                         version.value, version.xmin, xmax_str);
+                println!(
+                    "{}{}\"{}\" [TX {}-{}]",
+                    child_prefix, version_connector, version.value, version.xmin, xmax_str
+                );
             }
         }
 
@@ -2343,9 +2517,15 @@ impl Node {
                     child.print_version_history_recursive(&child_prefix, is_last_child, depth + 1);
                 }
                 Err(_) => {
-                    println!("{}{}[POISONED RWLOCK]",
-                             child_prefix,
-                             if is_last_child { "└── " } else { "├── " });
+                    println!(
+                        "{}{}[POISONED RWLOCK]",
+                        child_prefix,
+                        if is_last_child {
+                            "└── "
+                        } else {
+                            "├── "
+                        }
+                    );
                 }
             }
         }
