@@ -1,23 +1,18 @@
-use crate::rand::Rng;
+extern crate rand;
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
-extern crate rand;
-use crate::ValVer::{ValueVariant, VersionVariant};
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use once_cell::sync::*;
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::{Read, Seek, SeekFrom};
-use std::mem::zeroed;
-use std::path::Path;
+use std::io::Read;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
+use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
-use std::time::Duration;
-use std::{env, fs, io};
+use std::{fs, io};
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
 static LAST_ACTIVE_TXD: AtomicUsize = AtomicUsize::new(100);
@@ -398,7 +393,7 @@ impl Node {
     /// overlapping nodes are to be used as parent nodes for the rest of the children.
     ///
     /// It's a temporary brute-force solution with some unnecessary cloning.
-    /// `Naïve O(N²)` algorithm *is* inefficient in comparison to `O(N Log N)` but is used as a placeholder to be replaced with (maybe) Sweep Line Algorithm.
+    /// `Naive O(N²)` algorithm *is* inefficient in comparison to `O(N Log N)` but is used as a placeholder to be replaced with (maybe) Sweep Line Algorithm.
     ///
     /// Its tolerable now as the maximum number of keys per node is relatively small.
     ///
@@ -1198,13 +1193,13 @@ impl Node {
     fn deserialize(serialized_file_path: &str) -> io::Result<(Arc<RwLock<Node>>)> {
         let file = File::open(serialized_file_path.clone())?;
         let metadata = fs::metadata(serialized_file_path)?;
-        if metadata.len() == 0 {
+
+        if is_file_empty(serialized_file_path) {
             return Ok(Node::new());
-        } else {
-            println!("{:?}", metadata);
         }
 
         let read = BufReader::new(file);
+
 
         let single_bracket = Regex::new(r"^\[[^\]]+\]$").unwrap();
         let double_bracket = Regex::new(r"^\[[^\]]+\]\[[^\]]+\]$").unwrap();
@@ -1225,10 +1220,9 @@ impl Node {
                     .collect();
 
                 vec.push(I32OrString::Str(result));
-            } else if single_bracket.is_match(k)
-                || double_bracket.is_match(k)
-                || triple_bracket.is_match(k)
-            {
+            }
+
+            else if single_bracket.is_match(k) || double_bracket.is_match(k) || triple_bracket.is_match(k) {
                 let chars: Vec<char> = k.chars().collect();
                 let mut numbers = Vec::new();
                 let mut current_num = String::new();
@@ -1240,20 +1234,16 @@ impl Node {
                         ']' => {
                             if inside_brackets && !current_num.is_empty() {
                                 if current_num == "-" {
+                                    println!("A");
                                     numbers.push(-1);
                                 } else {
-                                    numbers.push(
-                                        current_num.parse::<i32>().expect("Error parsing number"),
-                                    );
+                                    numbers.push(current_num.parse::<i32>().expect("Error parsing number"));
                                 }
                                 current_num.clear();
                             }
                             inside_brackets = false;
                         }
-                        digit
-                            if digit.is_ascii_digit() && inside_brackets
-                                || inside_brackets && digit == '-' =>
-                        {
+                        digit if digit.is_ascii_digit() && inside_brackets || inside_brackets && digit == '-' => {
                             current_num.push(digit);
                         }
                         _ => {}
@@ -1274,8 +1264,8 @@ impl Node {
         }
 
         /*        for item in vec.iter() {
-            println!("{:?}", item);
-        }*/
+                    println!("{:?}", item);
+                }*/
         let vector_len = vec.len();
         let mut count = 0;
         let mut no_of_keys_in_node = 0;
@@ -1285,7 +1275,7 @@ impl Node {
         let mut to_set_version = false;
         let mut version_of_all_keys_in_same_node = 0;
         let mut xmin_vec: Vec<i32> = Vec::new();
-        let mut xmax_vec: Vec<Option<u32>> = Vec::new();
+        let mut xmax_vec: Vec<i32> = Vec::new();
         let mut values_vec: Vec<String> = Vec::new();
         let mut no_of_children = 0;
         let mut node_rank = 0;
@@ -1302,32 +1292,22 @@ impl Node {
                 internal_count = count;
             }
 
-            // println!("------------------------------------------------");
-            // println!("{:?} \n count: {} \n no_of_keys_in_node: {} \n no_of_version_of_all_keys_in_same_node: {}", vec[i], count, no_of_keys_in_node, version_of_all_keys_in_same_node);
-            // println!(" dec_count_for_versions: {:?}", dec_count_for_versions);
-            // println!("version_of_single_key: {:?}", version_of_single_key);
-            // println!("number_of_keys_inspected: {:?}", number_of_keys_inspected);
-            // println!("--------------------------------------------------");
-            if count
-                == (3
-                    + 5 * version_of_all_keys_in_same_node
-                    + no_of_keys_in_node
-                    + version_and_key_equal)
-                && count != 3
-                && version_of_all_keys_in_same_node != version_of_single_key
-                && no_of_keys_in_node > 0
-                && number_of_keys_inspected == no_of_keys_in_node
-            {
+
+            println!("------------------------------------------------");
+            println!("{:?} \n count: {} \n no_of_keys_in_node: {} \n no_of_version_of_all_keys_in_same_node: {}", vec[i], count, no_of_keys_in_node, version_of_all_keys_in_same_node);
+            println!(" dec_count_for_versions: {:?}", dec_count_for_versions);
+            println!("version_of_single_key: {:?}", version_of_single_key);
+            println!("number_of_keys_inspected: {:?}", number_of_keys_inspected);
+            println!("--------------------------------------------------");
+            if count == (3 + 5 * version_of_all_keys_in_same_node + no_of_keys_in_node + version_and_key_equal) && count != 3 && version_of_all_keys_in_same_node != version_of_single_key  && no_of_keys_in_node > 0 && number_of_keys_inspected == no_of_keys_in_node {
                 version_of_all_keys_in_same_node = 0;
                 version_of_single_key = 0;
                 no_of_keys_in_node = 0;
+                println!("{:?}", vec[i]);
                 no_of_children = vec[i].to_i32().unwrap();
-                vector_deserialized.push(DeserializedNode {
-                    child_count: no_of_children as u32,
-                    items: vector_deserialized_items.clone(),
-                });
-                vector_deserialized_items.clear();
+                vector_deserialized.push(DeserializedNode{ child_count: no_of_children as u32, items: vector_deserialized_items.clone()});
                 count = 1;
+                println!("A");
                 dec_count_for_versions = -1;
                 // internal_count_activate += 1;
                 number_of_keys_inspected = 0;
@@ -1340,15 +1320,14 @@ impl Node {
                 version_of_all_keys_in_same_node += version_of_single_key;
                 to_set_version = false;
                 number_of_keys_inspected += 1;
-                if number_of_keys_inspected == no_of_keys_in_node
-                    && version_of_all_keys_in_same_node == no_of_keys_in_node
-                {
+                if number_of_keys_inspected == no_of_keys_in_node && version_of_all_keys_in_same_node == no_of_keys_in_node {
+                    println!("AAAAAAAAAAAAAAAAAAA");
                     version_and_key_equal += 1;
                 }
             }
 
             if dec_count_for_versions == 0 {
-                // println!("Key {:?}, {}", vec[i], count);
+                println!("Key {:?}, {}", vec[i], count);
                 keys = vec[i].to_i32().unwrap();
                 to_set_version = true;
                 dec_count_for_versions = -1;
@@ -1356,64 +1335,47 @@ impl Node {
 
             if dec_count_for_versions > 0 && dec_count_for_versions <= 4 * version_of_single_key {
                 if dec_count_for_versions % 4 == 0 {
-                    // println!("XMIN {:?}", vec[i]);
+                    println!("XMIN {:?}", vec[i]);
                     xmin_vec.push(vec[i].to_i32().unwrap());
                 } else if (dec_count_for_versions + 1) % 4 == 0 {
-                    let result = vec[i].to_i32().unwrap();
-                    if result == -1 {
-                        xmax_vec.push(None);
-                    } else {
-                        xmax_vec.push(Some(vec[i].to_i32().unwrap() as u32));
-                    }
-                    // println!("XMAX {:?}", vec[i]);
+                    xmax_vec.push(vec[i].to_i32().unwrap());
+                    println!("XMAX {:?}", vec[i]);
                 } else if (dec_count_for_versions + 3) % 4 == 0 {
                     values_vec.push(vec[i].to_string().unwrap());
-                    // println!("VALUE {:?}", vec[i]);
+                    println!("VALUE {:?}", vec[i]);
                 }
 
                 dec_count_for_versions -= 1;
+
             } else if dec_count_for_versions > 0 {
                 dec_count_for_versions -= 1;
             }
             if dec_count_for_versions == 0 {
-                let mut ver_vec: Vec<Version> = Vec::new();
+                let mut ver_vec:Vec<Version> = Vec::new();
                 for j in 0..xmin_vec.len() {
-                    ver_vec.push(Version {
-                        value: values_vec[j].clone(),
-                        xmin: xmin_vec[j] as u32,
-                        xmax: xmax_vec[j],
-                    });
+                    ver_vec.push(Version {value: values_vec[j].clone(), xmin: xmin_vec[j] as u32, xmax: Some(xmax_vec[j] as u32)});
                 }
                 values_vec.clear();
                 xmin_vec.clear();
                 xmax_vec.clear();
 
-                vector_deserialized_items.push(Items {
-                    key: keys as u32,
-                    rank: node_rank as u32,
-                    version: ver_vec,
-                });
+                vector_deserialized_items.push(Items {key: keys as u32, rank: node_rank as u32, version: ver_vec.clone() });
 
-                // println!("{:?}", vector_deserialized_items);
+                println!("===================================");
+                println!("vector_deserialized_items: {:?}", vector_deserialized_items);
+                println!("===================================");
+
             }
 
-            if count == 3 {
-                // println!("{:?} {:?}", vec[i], vec[i-1]);
+            if count  == 3 /*&& internal_count_activate == 1*/  {
+                println!("{:?} {:?}", vec[i], vec[i-1]);
                 no_of_keys_in_node = vec[i].to_i32().unwrap();
-                node_rank = vec[i - 1].to_i32().unwrap();
+                node_rank = vec[i-1].to_i32().unwrap();
 
                 dec_count_for_versions = 0;
             }
         }
-        // println!("{:?}", vector_deserialized);
-
-        println!("===================================");
-        println!(
-            "vector_deserialized: {:#?} \n metadata length: {}",
-            vector_deserialized,
-            metadata.len()
-        );
-        println!("===================================");
+        println!("{:?}", vector_deserialized);
 
         let required_node = vector_deserialized[0].clone();
         let x = Node::deserialized_with_relation(required_node, &mut vector_deserialized);
@@ -1422,10 +1384,10 @@ impl Node {
         k = Node::deserialized_duplicate_data_check(k);
 
         let k = Arc::new(RwLock::new(k));
-        // println!("{:?}", k.read().unwrap().print_tree());
+        println!("{:?}", k.read().unwrap().print_tree());
         Ok(k)
-    }
 
+    }
     fn deserialized_with_relation(required_node: DeserializedNode, node_vec: &mut Vec<DeserializedNode>, ) -> UltraDeserialized {
         let mut x = UltraDeserialized {
             parent: required_node.clone(),
@@ -1769,151 +1731,44 @@ fn main() -> io::Result<()> {
     let wal_file_path = "/home/_meringue/RustroverProjects/ASMT/WAL.txt";
     let mut new_node = Node::new();
 
-    let current_transaction = Arc::new(RwLock::new(Transaction {
-        status: HashMap::new(),
-    }));
+    let current_transaction = Arc::new(RwLock::new(Transaction { status: HashMap::new(), }));
 
-    /*    Node::insert(Arc::clone(&new_node), 1, String::from("Woof"), 1);
-        Node::insert(Arc::clone(&new_node), 2, String::from("Woof"), 2);
-        Node::insert(Arc::clone(&new_node), 5, String::from("Woof"), 3);
-        Node::insert(Arc::clone(&new_node), 15, String::from("Woof"), 4);
-        Node::insert(Arc::clone(&new_node), 2, String::from("Neigh"), 6);
-        Node::insert(Arc::clone(&new_node), 5, String::from("KawKaw"), 7);
-        Node::insert(Arc::clone(&new_node), 15, String::from("Quack"), 8);
-        Node::insert(Arc::clone(&new_node), 3, String::from("Meow"), 12);
-
-        println!("{:?}", new_node.read().unwrap().print_tree());
-
-        Node::serialize(Arc::clone(&new_node));
-        Node::deserialize(serialized_file_path);
-    */
     match Node::deserialize(serialized_file_path) {
-        Ok(node) => {
-            new_node = node;
-        }
-        Err(e) => {
-            println!("{}", e);
-        }
+        Ok(node) =>  new_node = node,
+        Err(e) => println!("{:?}", e),
     }
 
-    let file = OpenOptions::new()
+    let file = Arc::new(RwLock::new(OpenOptions::new()
         .append(true)
         .create(true)
-        .open("/home/_meringue/RustroverProjects/ASMT/WAL.txt")?;
+        .open(wal_file_path)?));
 
-    let file = Arc::new(RwLock::new(file));
 
     let mut txd_count = 0;
+
+    if !is_file_empty(wal_file_path) { initial_wal_invoke(wal_file_path, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node)); }
 
     println!("CLI!");
     println!("Enter 'Help' for available commands & 'exit' to quit.");
 
     let cloned_node = Arc::clone(&new_node);
 
+    // TODO: PLEASE HANDLE BACKGROUND THREAD
     let (tx, rx) = mpsc::channel();
     let (sender, receiver) = mpsc::channel();
     let t1 = thread::spawn(move || {
         while let Ok(_) = rx.recv() {
-            match something(
-                Arc::clone(&cloned_node),
-                serialized_file_path,
-                wal_file_path,
-            ) {
-                Ok(output_node) => {
-                    sender.send(output_node).unwrap();
-                }
-                Err(e) => {
-                    println!("{}", e);
-                }
+            match something(Arc::clone(&cloned_node), serialized_file_path, wal_file_path, ) {
+                Ok(output_node) => sender.send(output_node).unwrap(),
+                Err(e) => println!("{}", e),
             }
         }
     });
 
-    // WAL data read
-    match read_file(wal_file_path) {
-        Ok(metadata) => {
-            let mut uncommitted_strings = Vec::new();
-            let mut load_to_cli = false;
-            for items in metadata.lines() {
-                let items = items.replace("\"", "");
-
-                uncommitted_strings.push(items.clone());
-                if items.to_lowercase().contains("commit") {
-                    load_to_cli = true;
-                }
-
-                if load_to_cli {
-                    for vals in uncommitted_strings.iter() {
-                        match CLI(
-                            vals.clone(),
-                            &mut txd_count,
-                            Arc::clone(&current_transaction),
-                            Arc::clone(&file),
-                            Arc::clone(&new_node),
-                            wal_file_path,
-                        ) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                println!("WAL recovery error: {}", e);
-                            }
-                        }
-                    }
-
-                    load_to_cli = false;
-                }
-            }
-
-            match empty_file(wal_file_path) {
-                Ok(_) => {}
-                Err(e) => {
-                    println!("File truncation error: {}", e);
-                }
-            }
-        }
-        Err(e) => {
-            println!("{}", e);
-        }
-    }
-    loop {
-        print!(">  ");
-        io::stdout().flush()?;
-
-        let mut cli_input = String::new();
-
-        match io::stdin().read_line(&mut cli_input) {
-            Ok(_) => {
-                match CLI(
-                    cli_input,
-                    &mut txd_count,
-                    Arc::clone(&current_transaction),
-                    Arc::clone(&file),
-                    Arc::clone(&new_node),
-                    wal_file_path,
-                ) {
-                    Ok(1) => {
-                        continue;
-                    }
-                    Ok(2) => {
-                        break;
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        println!("Error: {}", e);
-                    }
-                }
-
-                let metadata = fs::metadata(wal_file_path)?;
-                let size = metadata.len();
-
-                if CHECKPOINT_COUNTER.load(Ordering::Relaxed) >= 100 && size >= 1024 {
-                    println!("Maximum WAL file size exceeded.");
-                    tx.send(1).unwrap();
-                }
-            }
-            Err(e) => {
-                println!("Invalid argument. Error: {:?}", e);
-            }
-        }
+    match get_user_input_and_process(wal_file_path, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node)) {
+        Ok(true) => tx.send(1).unwrap(),
+        Ok(false) => {},
+        Err(e) => println!("{}", e),
     }
 
     t1.join().unwrap();
@@ -1921,11 +1776,7 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn something(
-    node: Arc<RwLock<Node>>,
-    serialized_file_path: &str,
-    wal_file_path: &str,
-) -> io::Result<Arc<RwLock<Node>>> {
+fn something(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str, ) -> io::Result<Arc<RwLock<Node>>> {
     println!("Pushing disk values to in-memory B-Tree");
     let returned_node = Node::push_to_memory(node, serialized_file_path, wal_file_path);
     CHECKPOINT_COUNTER.store(0, Ordering::Relaxed);
@@ -1933,14 +1784,7 @@ fn something(
     returned_node
 }
 
-fn CLI(
-    cli_input: String,
-    mut txd_count: &mut u32,
-    current_transaction: Arc<RwLock<Transaction>>,
-    file: Arc<RwLock<File>>,
-    new_node: Arc<RwLock<Node>>,
-    wal_file_path: &str,
-) -> io::Result<(u8)> {
+fn cli(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, wal_file_path: &str, ) -> io::Result<(u8)> {
     let cli_input = cli_input.trim();
 
     if cli_input.is_empty() {
@@ -2234,6 +2078,81 @@ fn empty_file(file_path: &str) -> io::Result<()> {
 
     Ok(())
 }
+
+fn is_file_empty(file_path: &str) -> bool {
+    match fs::metadata(file_path) {
+        Ok(metadata) => metadata.len() == 0,
+        Err(_) => false,
+    }
+}
+
+fn initial_wal_invoke(wal_file_path: &str, mut txd_count: &mut u32, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>) {
+    match read_file(wal_file_path) {
+        Ok(value) => {
+            let mut uncommitted_strings = Vec::new();
+            let mut load_to_cli = false;
+            for items in value.lines() {
+                let items = items.replace("\"", "");
+
+                uncommitted_strings.push(items.clone());
+                if items.to_lowercase().contains("commit") {
+                    load_to_cli = true;
+                }
+
+                if load_to_cli {
+                    for vals in uncommitted_strings.iter() {
+                        match cli(vals.clone(), &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), wal_file_path, ) {
+                            Ok(_) => {}
+                            Err(e) => println!("WAL recovery error: {}", e),
+
+                        }
+                    }
+                    load_to_cli = false;
+                }
+            }
+
+            match empty_file(wal_file_path) {
+                Ok(_) => {}
+                Err(e) => println!("File truncation error: {}", e),
+            }
+        }
+        Err(e) => println!("{}", e),
+    }
+
+}
+
+fn get_user_input_and_process(wal_file_path: &str, mut txd_count: &mut u32, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>) -> io::Result<bool> {
+    loop {
+        print!(">  ");
+        io::stdout().flush()?;
+
+        let mut cli_input = String::new();
+
+        match io::stdin().read_line(&mut cli_input) {
+            Ok(_) => {
+                match cli(cli_input, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), wal_file_path, ) {
+                    Ok(1) => continue,
+                    Ok(2) => break,
+                    Ok(_) => {}
+                    Err(e) => println!("Error: {}", e),
+                }
+                let metadata = fs::metadata(wal_file_path)?;
+                let size = metadata.len();
+
+                if CHECKPOINT_COUNTER.load(Ordering::Relaxed) >= 100 && size >= 1024 {
+                    println!("Maximum WAL file size exceeded.");
+                    return Ok(true);
+                }
+            }
+            Err(e) => println!("Invalid argument. Error: {:?}", e),
+        }
+    }
+
+
+    Ok(false)
+
+}
+
 
 impl Node {
     pub fn print_tree(&self) {
