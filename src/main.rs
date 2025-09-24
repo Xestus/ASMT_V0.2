@@ -14,6 +14,7 @@ use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::{fs, io};
 use std::net::{TcpListener, TcpStream};
+use log::log;
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
 static LAST_ACTIVE_TXD: AtomicUsize = AtomicUsize::new(100);
@@ -1824,18 +1825,31 @@ fn checkpoint(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path
     CHECKPOINT_COUNTER.store(0, Ordering::Relaxed);
 }
 
-fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>> ) -> io::Result<(u8)> {
+fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, mut stream: Option<&TcpStream> ) -> io::Result<(u8)> {
     let cli_input = cli_input.trim();
 
     if cli_input.is_empty() { return Ok(1); }
 
     let args = cli_input.split_whitespace().collect::<Vec<&str>>();
 
+    let log_message = |message: &str|{
+        if let Some(s) = stream {
+            let mut s = s;
+            match writeln!(s, "{}", message) {
+                Ok(_) => {},
+                Err(e) => println!("Error writing to stream: {}", e),
+            }
+        } else {
+            println!("{}", message);
+        }
+    };
+
     if args.is_empty() { return Ok(1); }
     match args[0].to_lowercase().as_str() {
         "begin" => {
             if args.len() != 1 {
-                println!("Invalid argument");
+                log_message("Invalid argument");
+
                 return Ok(1);
             }
 
@@ -1847,7 +1861,7 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
 
         "commit" => {
             if args.len() != 1 {
-                println!("Invalid argument");
+                log_message("Invalid argument");
                 return Ok(1);
             }
 
@@ -1860,7 +1874,7 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
 
         "abort" => {
             if args.len() != 1 {
-                println!("Invalid argument");
+                log_message("Invalid argument");
                 return Ok(1);
             }
             Node::flush_to_wal(Arc::clone(&file), args)?;
@@ -1871,7 +1885,7 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
 
         "insert" => {
             if args.len() != 3 {
-                println!("Invalid argument");
+                log_message("Invalid argument");
                 return Ok(1);
             }
 
@@ -1888,43 +1902,43 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
 
         "update" => {
             if args.len() != 3 {
-                println!("Invalid argument");
+                log_message("Invalid argument");
                 return Ok(1);
             }
-
-            Node::flush_to_wal(Arc::clone(&file), args.clone())?;
 
             let key = args[1].parse::<u32>().expect("Invalid argument");
             let value = args[2].parse::<String>().expect("Invalid argument");
 
             let mut_txd_count = txd_count.read().unwrap();
             match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), *mut_txd_count, ) {
-                Some(_) => {}
-                None => println!("Key not found"),
+                Some(_) => {
+                    Node::flush_to_wal(Arc::clone(&file), args.clone())?;
+                }
+                None => log_message("Key not found"),
 
             }
         }
 
         "delete" => {
             if args.len() != 2 {
-                println!("Invalid argument");
+                log_message("Invalid argument");
                 return Ok(1);
             }
-
-            Node::flush_to_wal(Arc::clone(&file), args.clone())?;
 
             let key = args[1].parse::<u32>().expect("Invalid argument");
 
             let mut_txd_count = txd_count.read().unwrap();
             match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, *mut_txd_count) {
-                Some(_) => {}
-                None => println!("Key not found"),
+                Some(_) => {
+                    Node::flush_to_wal(Arc::clone(&file), args.clone())?;
+                }
+                None => log_message("Key not found"),
             }
         }
 
         "checkpoint" => {
             if args.len() != 1 {
-                println!("Invalid argument");
+                log_message("Invalid argument");
                 return Ok(1);
             }
 
@@ -1933,88 +1947,111 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
 
         "select" => {
             if args.len() != 2 {
-                println!("Invalid argument");
+                log_message("Invalid argument");
                 return Ok(1);
             }
             let key = args[1].parse::<u32>().expect("Invalid argument");
 
             let mut_txd_count = txd_count.read().unwrap();
+            let messages ;
             match Node::select_key(Arc::clone(&new_node), key, *mut_txd_count, Arc::clone(&current_transaction)) {
-                Some(value) => println!("Value: {:?}", value),
-                None =>  println!("Key not found"),
+                Some(value) => {
+                    messages = format!("Value: {:?}", value)
+                },
+                None =>  {
+                    messages = String::from("Key not found")
+                },
             }
+
+            log_message(messages.as_str());
         }
 
         "dump" => {
             if args.len() != 2 {
-                println!("Invalid argument");
+                log_message("Invalid argument");
                 return Ok(1);
             }
             let key = args[1].parse::<u32>().expect("Invalid argument");
 
+            let mut messages= String::new();
             match Node::key_position(Arc::clone(&new_node), key) {
                 Some(value) => {
                     for i in value.iter() {
-                        print!("Value: {:?} [xmin: {} -- xmax: ", i.value, i.xmin);
                         if let Some(xmax) = i.xmax {
-                            println!("{}]", xmax);
+                            messages = format!("Value: {:?} [xmin: {} -- xmax: {}]", i.value, i.xmin, xmax);
                         } else {
-                            println!("∞]");
+                            messages = format!("Value: {:?} [xmin: {} -- xmax: ∞]", i.value, i.xmin);
                         }
                     }
                 }
 
-                None => println!("Key not found"),
-
+                None => {
+                    messages = String::from("Key not found")
+                },
             }
-            println!("{:?}", txd_count);
+
+            log_message(messages.as_str());
         }
 
         "tree" => {
             if args.len() != 1 {
-                println!("Invalid argument");
+                log_message("Invalid argument");
                 return Ok(1);
             }
 
-            println!("{:?}", new_node.read().unwrap().print_tree());
+            let message = format!("{:?}", new_node.read().unwrap().print_tree());
+            log_message(message.as_str());
         }
 
         "stats" => {
             if args.len() != 1 {
-                println!("Invalid argument");
+                log_message("Invalid argument");
                 return Ok(1);
             }
 
-            println!("{:?}", new_node.read().unwrap().print_stats());
+            let message = format!("{:?}", new_node.read().unwrap().print_stats());
+            log_message(message.as_str());
         }
 
         "help" => {
             if args.len() != 1 {
-                println!("Invalid argument");
+                log_message("Invalid argument");
                 return Ok(1);
             }
 
-            println!("  insert <key> <value>  - Insert a key-value pair");
-            println!("  push                  - Push inserted key-value to B-Tree");
-            println!("  get <key>             - Get value for a key");
-            println!("  delete <key>          - Delete a key (Broken Sorry)");
-            println!("  tree                  - Show B-Tree in ASCII art form");
-            println!("  stats                 - Show B-Tree Stats");
-            println!("  help                  - Show this help");
-            println!("  exit                  - Exit the program");
+            let messages = {
+                "insert <key> <value>  - Insert a key-value pair\n
+                 update <key> <value>  - Update a key-value pair\n
+                 select <key>          - Get the visible value for the key\n
+                 dump <key>            - Get all the values for the key\n
+                 delete <key>          - Delete a key\n
+                 begin                 - Start a cycle\n
+                 commit                - Push a new version of the key\n
+                 abort                 - Abort the current cycle\n
+                 tree                  - Show B-Tree in ASCII art form\n
+                 stats                 - Show B-Tree Stats\n
+                 help                  - List out all the commands\n
+                 exit                  - Exit the program"
+            };
+
+            log_message(messages);
         }
 
         "exit" => {
             if args.len() != 1 {
-                println!("Invalid argument");
+                log_message("Invalid argument");
                 return Ok(1);
             }
 
-            println!("Exiting");
+            log_message("Invalid argument");
             return Ok(2);
         }
 
-        _ => println!("Unknown command: {}. Type 'help' for available commands.", args[0]),
+        _ => {
+
+            let message = format!("Unknown command: {}. Type 'help' for available commands.", args[0]);
+            log_message(message.as_str());
+        },
     }
 
     Ok(0)
@@ -2035,7 +2072,7 @@ fn initial_wal_invoke(wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_
 
                 if load_to_cli {
                     for vals in uncommitted_strings.iter() {
-                        match cli(vals.clone(), Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node)) {
+                        match cli(vals.clone(), Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), None) {
                             Ok(_) => {}
                             Err(e) => println!("WAL recovery error: {}", e),
 
@@ -2069,7 +2106,7 @@ fn handle_stream(mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLo
                 let command = String::from_utf8_lossy(&buffer[..n]);
 
                 let command = command.trim().to_string();
-                match cli(command, Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node)) {
+                match cli(command, Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), Some(&stream)) {
                     Ok(1) => continue,
                     Ok(2) => break,
                     Ok(3) => {
