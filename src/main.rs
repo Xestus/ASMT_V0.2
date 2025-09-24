@@ -1144,12 +1144,12 @@ impl Node {
         }
     }
 
-    fn serialize(node: Arc<RwLock<Node>>) -> io::Result<()> {
+    fn serialize(node: Arc<RwLock<Node>>, serialized_file_path: &str) -> io::Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
-            .open("/home/_meringue/RustroverProjects/ASMT/example.txt")?;
+            .open(serialized_file_path)?;
 
         writeln!(file, "[0]").expect("TODO: panic message");
         Node::serialization(node, &mut file);
@@ -1524,7 +1524,7 @@ impl Node {
 
         println!("{:?}", node.read().unwrap().print_tree());
 
-        match Node::serialize(Arc::clone(&node)) {
+        match Node::serialize(Arc::clone(&node), serialized_file_path) {
             Ok(_) => {
                 let mut file = OpenOptions::new()
                     .write(true)
@@ -1743,32 +1743,26 @@ fn main() -> io::Result<()> {
         .create(true)
         .open(wal_file_path)?));
 
+    let cloned_node = Arc::clone(&new_node);
+    let cloned_file = Arc::clone(&file);
 
     let mut txd_count = 0;
 
     if !is_file_empty(wal_file_path) { initial_wal_invoke(wal_file_path, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node)); }
 
-    println!("CLI!");
-    println!("Enter 'Help' for available commands & 'exit' to quit.");
-
-    let cloned_node = Arc::clone(&new_node);
-
-    // TODO: PLEASE HANDLE BACKGROUND THREAD
     let (tx, rx) = mpsc::channel();
-    let (sender, receiver) = mpsc::channel();
     let t1 = thread::spawn(move || {
         while let Ok(_) = rx.recv() {
-            match something(Arc::clone(&cloned_node), serialized_file_path, wal_file_path, ) {
-                Ok(output_node) => sender.send(output_node).unwrap(),
-                Err(e) => println!("{}", e),
-            }
+            checkpoint(Arc::clone(&cloned_node), serialized_file_path, wal_file_path, Arc::clone(&cloned_file));
         }
     });
 
-    match get_user_input_and_process(wal_file_path, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node)) {
-        Ok(true) => tx.send(1).unwrap(),
-        Ok(false) => {},
-        Err(e) => println!("{}", e),
+    loop {
+        match get_user_input_and_process(wal_file_path, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node)) {
+            Ok(true) => tx.send(1).unwrap(),
+            Ok(false) => break,
+            Err(e) => println!("{}", e),
+        }
     }
 
     t1.join().unwrap();
@@ -1776,26 +1770,45 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn something(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str, ) -> io::Result<Arc<RwLock<Node>>> {
-    println!("Pushing disk values to in-memory B-Tree");
-    let returned_node = Node::push_to_memory(node, serialized_file_path, wal_file_path);
+fn checkpoint(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str, file: Arc<RwLock<File>> ){
+    let mut cloned_node = node.clone();
+
+    cloned_node = Node::fetch_serializable_btree(cloned_node);
+
+    match Node::serialize(Arc::clone(&cloned_node),serialized_file_path) {
+        Ok(_) => {}
+        Err(e) =>  println!("Serialization failed: {}", e),
+    }
+
+    match Node::get_uncommitted_transactions(wal_file_path) {
+        Ok(uncommitted_strings) => match empty_file(wal_file_path) {
+            Ok(_) => {
+                for strs in uncommitted_strings.iter() {
+                    let uncommitted_args = strs.split(" ").collect::<Vec<&str>>();
+                    match Node::flush_to_wal(Arc::clone(&file), uncommitted_args) {
+                        Ok(_) => {}
+                        Err(e) => println!("Flushing to WAL failed: {}", e),
+                    }
+                }
+            }
+            Err(e) => println!("WAL truncation error: {}", e),
+        },
+        Err(e) => println!("Can't fetch uncommitted transactions: {}", e),
+    }
+
+    println!("{:?}", cloned_node.read().unwrap().print_tree());
+
     CHECKPOINT_COUNTER.store(0, Ordering::Relaxed);
-    println!("Pushed disk values");
-    returned_node
 }
 
-fn cli(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, wal_file_path: &str, ) -> io::Result<(u8)> {
+fn cli(cli_input: String, txd_count: &mut u32, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>> ) -> io::Result<(u8)> {
     let cli_input = cli_input.trim();
 
-    if cli_input.is_empty() {
-        return Ok(1);
-    }
+    if cli_input.is_empty() { return Ok(1); }
 
     let args = cli_input.split_whitespace().collect::<Vec<&str>>();
 
-    if args.is_empty() {
-        return Ok(1);
-    }
+    if args.is_empty() { return Ok(1); }
     match args[0].to_lowercase().as_str() {
         "begin" => {
             if args.len() != 1 {
@@ -1804,14 +1817,8 @@ fn cli(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
             }
 
             Node::flush_to_wal(Arc::clone(&file), args)?;
-
             *txd_count += 1;
-
-            current_transaction
-                .write()
-                .unwrap()
-                .status
-                .insert(*txd_count, TransactionStatus::Active);
+            current_transaction.write().unwrap().status.insert(*txd_count, TransactionStatus::Active);
         }
 
         "commit" => {
@@ -1822,11 +1829,7 @@ fn cli(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
 
             LAST_ACTIVE_TXD.store(*txd_count as usize, Ordering::SeqCst);
             Node::flush_to_wal(Arc::clone(&file), args)?;
-            current_transaction
-                .write()
-                .unwrap()
-                .status
-                .insert(*txd_count, TransactionStatus::Committed);
+            current_transaction.write().unwrap().status.insert(*txd_count, TransactionStatus::Committed);
         }
 
         "abort" => {
@@ -1834,14 +1837,9 @@ fn cli(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
                 println!("Invalid argument");
                 return Ok(1);
             }
-
             Node::flush_to_wal(Arc::clone(&file), args)?;
 
-            current_transaction
-                .write()
-                .unwrap()
-                .status
-                .insert(*txd_count, TransactionStatus::Aborted);
+            current_transaction.write().unwrap().status.insert(*txd_count, TransactionStatus::Aborted);
         }
 
         "insert" => {
@@ -1871,16 +1869,10 @@ fn cli(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
             let key = args[1].parse::<u32>().expect("Invalid argument");
             let value = args[2].parse::<String>().expect("Invalid argument");
 
-            match Node::find_and_update_key_version(
-                Arc::clone(&new_node),
-                key,
-                Some(value),
-                *txd_count,
-            ) {
+            match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), *txd_count, ) {
                 Some(_) => {}
-                None => {
-                    println!("Key not found");
-                }
+                None => println!("Key not found"),
+
             }
         }
 
@@ -1896,9 +1888,8 @@ fn cli(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
 
             match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, *txd_count) {
                 Some(_) => {}
-                None => {
-                    println!("Key not found");
-                }
+                None => println!("Key not found"),
+
             }
         }
 
@@ -1908,40 +1899,7 @@ fn cli(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
                 return Ok(1);
             }
 
-            let mut cloned_node = new_node.clone();
-
-            cloned_node = Node::fetch_serializable_btree(cloned_node);
-
-            match Node::serialize(Arc::clone(&cloned_node)) {
-                Ok(_) => {}
-                Err(e) => {
-                    println!("Serialization failed: {}", e);
-                }
-            }
-
-            match Node::get_uncommitted_transactions(wal_file_path) {
-                Ok(uncommitted_strings) => match empty_file(wal_file_path) {
-                    Ok(_) => {
-                        for strs in uncommitted_strings.iter() {
-                            let uncommitted_args = strs.split(" ").collect::<Vec<&str>>();
-                            match Node::flush_to_wal(Arc::clone(&file), uncommitted_args) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    println!("Flushing to WAL failed: {}", e);
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        println!("WAL truncation error: {}", e);
-                    }
-                },
-                Err(e) => {
-                    println!("Can't fetch uncommitted transactions: {}", e);
-                }
-            }
-
-            println!("{:?}", cloned_node.read().unwrap().print_tree());
+            return Ok(3);
         }
 
         /// What does push do now? TODO: FIND ITS USE
@@ -1960,19 +1918,9 @@ fn cli(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
             }
             let key = args[1].parse::<u32>().expect("Invalid argument");
 
-            match Node::select_key(
-                Arc::clone(&new_node),
-                key,
-                *txd_count,
-                Arc::clone(&current_transaction),
-            ) {
-                Some(value) => {
-                    println!("Value: {:?}", value);
-                }
-
-                None => {
-                    println!("Key not found");
-                }
+            match Node::select_key(Arc::clone(&new_node), key, *txd_count, Arc::clone(&current_transaction)) {
+                Some(value) => println!("Value: {:?}", value),
+                None =>  println!("Key not found"),
             }
         }
 
@@ -1995,9 +1943,8 @@ fn cli(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
                     }
                 }
 
-                None => {
-                    println!("Key not found");
-                }
+                None => println!("Key not found"),
+
             }
             println!("{:?}", txd_count);
         }
@@ -2046,15 +1993,77 @@ fn cli(cli_input: String, mut txd_count: &mut u32, current_transaction: Arc<RwLo
             return Ok(2);
         }
 
-        _ => {
-            println!(
-                "Unknown command: {}. Type 'help' for available commands.",
-                args[0]
-            );
-        }
+        _ => println!("Unknown command: {}. Type 'help' for available commands.", args[0]),
     }
 
     Ok(0)
+}
+
+fn initial_wal_invoke(wal_file_path: &str, mut txd_count: &mut u32, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>) {
+    match read_file(wal_file_path) {
+        Ok(value) => {
+            let mut uncommitted_strings = Vec::new();
+            let mut load_to_cli = false;
+            for items in value.lines() {
+                let items = items.replace("\"", "");
+
+                uncommitted_strings.push(items.clone());
+                if items.to_lowercase().contains("commit") {
+                    load_to_cli = true;
+                }
+
+                if load_to_cli {
+                    for vals in uncommitted_strings.iter() {
+                        match cli(vals.clone(), &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node)) {
+                            Ok(_) => {}
+                            Err(e) => println!("WAL recovery error: {}", e),
+
+                        }
+                    }
+                    load_to_cli = false;
+                }
+            }
+
+            match empty_file(wal_file_path) {
+                Ok(_) => {}
+                Err(e) => println!("File truncation error: {}", e),
+            }
+        }
+        Err(e) => println!("{}", e),
+    }
+
+}
+
+fn get_user_input_and_process(wal_file_path: &str, mut txd_count: &mut u32, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>) -> io::Result<bool> {
+    println!("CLI!");
+    println!("Enter 'Help' for available commands & 'exit' to quit.");
+    loop {
+        print!(">  ");
+        io::stdout().flush()?;
+
+        let mut cli_input = String::new();
+
+        match io::stdin().read_line(&mut cli_input) {
+            Ok(_) => {
+                match cli(cli_input, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node)) {
+                    Ok(1) => continue,
+                    Ok(2) => break,
+                    Ok(3) => return Ok(true),
+                    Ok(_) => {}
+                    Err(e) => println!("Error: {}", e),
+                }
+                let metadata = fs::metadata(wal_file_path)?;
+                let size = metadata.len();
+
+                if CHECKPOINT_COUNTER.load(Ordering::Relaxed) >= 100 && size >= 1024 {
+                    println!("Maximum WAL file size exceeded.");
+                    return Ok(true);
+                }
+            }
+            Err(e) => println!("Invalid argument. Error: {:?}", e),
+        }
+    }
+    Ok(false)
 }
 
 fn read_file(file_path: &str) -> io::Result<String> {
@@ -2086,72 +2095,6 @@ fn is_file_empty(file_path: &str) -> bool {
     }
 }
 
-fn initial_wal_invoke(wal_file_path: &str, mut txd_count: &mut u32, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>) {
-    match read_file(wal_file_path) {
-        Ok(value) => {
-            let mut uncommitted_strings = Vec::new();
-            let mut load_to_cli = false;
-            for items in value.lines() {
-                let items = items.replace("\"", "");
-
-                uncommitted_strings.push(items.clone());
-                if items.to_lowercase().contains("commit") {
-                    load_to_cli = true;
-                }
-
-                if load_to_cli {
-                    for vals in uncommitted_strings.iter() {
-                        match cli(vals.clone(), &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), wal_file_path, ) {
-                            Ok(_) => {}
-                            Err(e) => println!("WAL recovery error: {}", e),
-
-                        }
-                    }
-                    load_to_cli = false;
-                }
-            }
-
-            match empty_file(wal_file_path) {
-                Ok(_) => {}
-                Err(e) => println!("File truncation error: {}", e),
-            }
-        }
-        Err(e) => println!("{}", e),
-    }
-
-}
-
-fn get_user_input_and_process(wal_file_path: &str, mut txd_count: &mut u32, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>) -> io::Result<bool> {
-    loop {
-        print!(">  ");
-        io::stdout().flush()?;
-
-        let mut cli_input = String::new();
-
-        match io::stdin().read_line(&mut cli_input) {
-            Ok(_) => {
-                match cli(cli_input, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), wal_file_path, ) {
-                    Ok(1) => continue,
-                    Ok(2) => break,
-                    Ok(_) => {}
-                    Err(e) => println!("Error: {}", e),
-                }
-                let metadata = fs::metadata(wal_file_path)?;
-                let size = metadata.len();
-
-                if CHECKPOINT_COUNTER.load(Ordering::Relaxed) >= 100 && size >= 1024 {
-                    println!("Maximum WAL file size exceeded.");
-                    return Ok(true);
-                }
-            }
-            Err(e) => println!("Invalid argument. Error: {:?}", e),
-        }
-    }
-
-
-    Ok(false)
-
-}
 
 
 impl Node {
