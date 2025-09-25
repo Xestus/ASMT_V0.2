@@ -1759,11 +1759,12 @@ fn main() -> io::Result<()> {
         }
     });
 
-    let listener = TcpListener::bind("127.0.0.1:8080")?;
+    let listener = TcpListener::bind("127.0.0.1:8081")?;
     println!("Server listening on port 8080");
 
 
     for stream in listener.incoming() {
+        println!("21321");
         let cloned_node = Arc::clone(&new_node);
         let cloned_file = Arc::clone(&file);
         let cloned_transaction = Arc::clone(&current_transaction);
@@ -1976,13 +1977,20 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
             let mut messages= String::new();
             match Node::key_position(Arc::clone(&new_node), key) {
                 Some(value) => {
+                    let mut message_vector = Vec::new();
+
                     for i in value.iter() {
+                        let k ;
                         if let Some(xmax) = i.xmax {
-                            messages = format!("Value: {:?} [xmin: {} -- xmax: {}]", i.value, i.xmin, xmax);
+                            k = format!("Value: {:?} [xmin: {} -- xmax: {}]", i.value, i.xmin, xmax);
                         } else {
-                            messages = format!("Value: {:?} [xmin: {} -- xmax: ∞]", i.value, i.xmin);
+                            k = format!("Value: {:?} [xmin: {} -- xmax: ∞]", i.value, i.xmin);
                         }
+
+                        message_vector.push(k);
                     }
+
+                    messages = message_vector.join(" ");
                 }
 
                 None => {
@@ -2094,18 +2102,20 @@ fn initial_wal_invoke(wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_
 
 fn handle_stream(mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>) -> io::Result<()> {
     // In session project.
-    // println!("CLI!");
     // println!("Enter 'Help' for available commands & 'exit' to quit.");
 
     let mut buffer = [0; 1024];
 
     loop {
         match stream.read(&mut buffer) {
-            Ok(0) => break,
+            Ok(0) => {
+                println!("ZZZ");
+                break;
+            },
             Ok(n) => {
-                let command = String::from_utf8_lossy(&buffer[..n]);
-
+                let command = String::from_utf8_lossy(&buffer[0..n]);
                 let command = command.trim().to_string();
+                println!("{}", command);
                 match cli(command, Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), Some(&stream)) {
                     Ok(1) => continue,
                     Ok(2) => break,
@@ -2115,6 +2125,7 @@ fn handle_stream(mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLo
                     Ok(_) => {}
                     Err(e) => println!("Error: {}", e),
                 }
+
                 let metadata = fs::metadata(wal_file_path)?;
                 let size = metadata.len();
 
@@ -2123,6 +2134,7 @@ fn handle_stream(mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLo
                     CHECKPOINT_COUNTER.store(0, Ordering::Relaxed);
                 }
 
+                stream.write_all(b"\n")?;
             }
 
             Err(e) => {
