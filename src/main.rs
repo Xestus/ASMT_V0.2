@@ -10,10 +10,11 @@ use std::fs::OpenOptions;
 use std::io::Read;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{mpsc, Arc, RwLock, Mutex};
 use std::thread;
 use std::{fs, io};
 use std::net::{TcpListener, TcpStream};
+use std::thread::JoinHandle;
 use log::log;
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
@@ -1727,6 +1728,53 @@ impl I32OrString {
     }
 }
 
+
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
+struct ThreadPool {
+    threads: Vec<Worker>,
+    sender: mpsc::Sender<Job>,
+}
+
+impl ThreadPool {
+    fn new(size: usize) -> Self {
+        let (rx, tx) = mpsc::channel();
+
+        let tx = Arc::new(Mutex::new(tx));
+
+        let mut workers: Vec<Worker> = Vec::with_capacity(size);
+        for i in 0..size {
+            workers.push(Worker::new(i, Arc::clone(&tx)))
+        }
+
+        ThreadPool {threads: workers, sender: rx}
+    }
+
+    fn execute<F> (&self, func: F)
+    where F: FnOnce() + 'static + Send {
+        let job = Box::new(func);
+        self.sender.send(job).unwrap();
+    }
+}
+
+struct Worker {
+    id: usize,
+    handle: JoinHandle<()>,
+}
+
+impl Worker {
+    fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Self {
+        let handle = thread::spawn(move || {
+            while let Ok(job) = receiver.lock().unwrap().recv() {
+                job();
+            }
+        });
+
+        Worker{id, handle}
+    }
+}
+
+
 fn main() -> io::Result<()> {
     NODE_SIZE.set(4).expect("Failed to set size");
     let serialized_file_path = "/home/_meringue/RustroverProjects/ASMT/example.txt";
@@ -1761,9 +1809,34 @@ fn main() -> io::Result<()> {
 
     let listener = TcpListener::bind("127.0.0.1:8081")?;
     println!("Server listening on port 8080");
+    let pool = ThreadPool::new(4);
 
 
-    for stream in listener.incoming() {
+    for (id, stream) in listener.incoming().enumerate() {
+        let cloned_node = Arc::clone(&new_node);
+        let cloned_file = Arc::clone(&file);
+        let cloned_transaction = Arc::clone(&current_transaction);
+        let cloned_txd_count = Arc::clone(&txd_count);
+        match stream {
+            Ok(stream)=> {
+                pool.execute(move || {
+                    match handle_stream(id, stream, wal_file_path, Arc::clone(&cloned_txd_count), Arc::clone(&cloned_transaction), Arc::clone(&cloned_file), Arc::clone(&cloned_node)) {
+                        Ok(_) => (),
+                        Err(e) => println!("Error handling stream: {}", e),
+                    }
+                })
+            }
+            Err(e) => println!("Error handling stream: {}", e),
+        }
+
+        if CHECKPOINT_COUNTER.load(Ordering::Relaxed) == 100 {
+            tx.send(1).unwrap();
+        }
+    }
+
+
+
+/*    for stream in listener.incoming() {
         println!("21321");
         let cloned_node = Arc::clone(&new_node);
         let cloned_file = Arc::clone(&file);
@@ -1779,14 +1852,6 @@ fn main() -> io::Result<()> {
 
         if CHECKPOINT_COUNTER.load(Ordering::Relaxed) == 100 {
             tx.send(1).unwrap();
-        }
-    }
-
-/*    loop {
-        match get_user_input_and_process(wal_file_path, &mut txd_count, Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node)) {
-            Ok(true) => tx.send(1).unwrap(),
-            Ok(false) => break,
-            Err(e) => println!("{}", e),
         }
     }*/
 
@@ -2100,11 +2165,14 @@ fn initial_wal_invoke(wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_
 
 }
 
-fn handle_stream(mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>) -> io::Result<()> {
+fn handle_stream(id: usize, mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>) -> io::Result<()> {
     // In session project.
     // println!("Enter 'Help' for available commands & 'exit' to quit.");
 
+
+    println!("From {:?}", id);
     let mut buffer = [0; 1024];
+    
 
     loop {
         match stream.read(&mut buffer) {
@@ -2115,7 +2183,6 @@ fn handle_stream(mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLo
             Ok(n) => {
                 let command = String::from_utf8_lossy(&buffer[0..n]);
                 let command = command.trim().to_string();
-                println!("{}", command);
                 match cli(command, Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), Some(&stream)) {
                     Ok(1) => continue,
                     Ok(2) => break,
@@ -2135,6 +2202,10 @@ fn handle_stream(mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLo
                 }
 
                 stream.write_all(b"\n")?;
+
+                if *&buffer[n-1] == 10 {
+                    continue;
+                }
             }
 
             Err(e) => {
@@ -2175,7 +2246,8 @@ fn handle_stream(mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLo
             Err(e) => println!("Invalid argument. Error: {:?}", e),
         }
     }
-*/    Ok(())
+*/
+    Ok(())
 }
 
 fn read_file(file_path: &str) -> io::Result<String> {
