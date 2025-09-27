@@ -29,12 +29,6 @@ struct Version {
 }
 
 #[derive(Debug, Clone, PartialEq, Ord, PartialOrd, Eq, Hash)]
-enum ValVer {
-    VersionVariant(Vec<Version>),
-    ValueVariant(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Ord, PartialOrd, Eq, Hash)]
 struct Items {
     key: u32,
     rank: u32,
@@ -114,7 +108,6 @@ impl Node {
                     return Ok(());
                 }
                 None => {
-                    println!("New version");
                     let version = vec![ver.clone()];
                     Node::add_new_keys(
                         Arc::clone(&self_node),
@@ -1774,7 +1767,6 @@ impl Worker {
     }
 }
 
-
 fn main() -> io::Result<()> {
     NODE_SIZE.set(4).expect("Failed to set size");
     let serialized_file_path = "/home/_meringue/RustroverProjects/ASMT/example.txt";
@@ -1807,18 +1799,24 @@ fn main() -> io::Result<()> {
         }
     });
 
+    println!("{:?}", new_node.read().unwrap().print_stats());
+    println!("{:?}", new_node.read().unwrap().print_tree());
+
     let listener = TcpListener::bind("127.0.0.1:8081")?;
     println!("Server listening on port 8080");
     let pool = ThreadPool::new(4);
 
 
-    for (id, stream) in listener.incoming().enumerate() {
+/*    for (id, stream) in listener.incoming().enumerate() {
         let cloned_node = Arc::clone(&new_node);
         let cloned_file = Arc::clone(&file);
         let cloned_transaction = Arc::clone(&current_transaction);
         let cloned_txd_count = Arc::clone(&txd_count);
         match stream {
             Ok(stream)=> {
+                println!("New client connected!");
+                println!("New client connected: {}", stream.peer_addr()?);
+
                 pool.execute(move || {
                     match handle_stream(id, stream, wal_file_path, Arc::clone(&cloned_txd_count), Arc::clone(&cloned_transaction), Arc::clone(&cloned_file), Arc::clone(&cloned_node)) {
                         Ok(_) => (),
@@ -1832,12 +1830,9 @@ fn main() -> io::Result<()> {
         if CHECKPOINT_COUNTER.load(Ordering::Relaxed) == 100 {
             tx.send(1).unwrap();
         }
-    }
+    }*/
 
-
-
-/*    for stream in listener.incoming() {
-        println!("21321");
+    for stream in listener.incoming() {
         let cloned_node = Arc::clone(&new_node);
         let cloned_file = Arc::clone(&file);
         let cloned_transaction = Arc::clone(&current_transaction);
@@ -1845,7 +1840,7 @@ fn main() -> io::Result<()> {
 
         match stream {
             Ok(stream) => {
-                thread::spawn(move || handle_stream(stream, wal_file_path, Arc::clone(&cloned_txd_count), Arc::clone(&cloned_transaction), Arc::clone(&cloned_file), Arc::clone(&cloned_node)));
+                thread::spawn(move || handle_stream(None, stream, wal_file_path, Arc::clone(&cloned_txd_count), Arc::clone(&cloned_transaction), Arc::clone(&cloned_file), Arc::clone(&cloned_node)));
             }
             Err(e) => println!("Error: {}", e),
         }
@@ -1853,7 +1848,7 @@ fn main() -> io::Result<()> {
         if CHECKPOINT_COUNTER.load(Ordering::Relaxed) == 100 {
             tx.send(1).unwrap();
         }
-    }*/
+    }
 
     t1.join().unwrap();
 
@@ -1892,6 +1887,7 @@ fn checkpoint(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path
 }
 
 fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, mut stream: Option<&TcpStream> ) -> io::Result<(u8)> {
+    println!("{:?}", cli_input);
     let cli_input = cli_input.trim();
 
     if cli_input.is_empty() { return Ok(1); }
@@ -1900,6 +1896,7 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
 
     let log_message = |message: &str|{
         if let Some(s) = stream {
+            println!("ZZZ {}", cli_input);
             let mut s = s;
             match writeln!(s, "{}", message) {
                 Ok(_) => {},
@@ -2072,8 +2069,11 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
                 return Ok(1);
             }
 
-            let message = format!("{:?}", new_node.read().unwrap().print_tree());
+            let message = format!("{:?}", new_node.read().unwrap());
+            let message_2 = format!("{:?}", new_node.read().unwrap().print_tree());
+            println!("{:?}", new_node.read().unwrap().print_tree());
             log_message(message.as_str());
+            log_message(message_2.as_str());
         }
 
         "stats" => {
@@ -2152,6 +2152,8 @@ fn initial_wal_invoke(wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_
                         }
                     }
                     load_to_cli = false;
+
+                    uncommitted_strings.clear();
                 }
             }
 
@@ -2165,25 +2167,33 @@ fn initial_wal_invoke(wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_
 
 }
 
-fn handle_stream(id: usize, mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>) -> io::Result<()> {
+fn handle_stream(id: Option<usize>, mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>) -> io::Result<()> {
     // In session project.
     // println!("Enter 'Help' for available commands & 'exit' to quit.");
 
+    print!("Client ID: {} ", stream.peer_addr()?);
+    match id {
+        Some(id) => println!("Fron ID: {:?}", id),
+        None => {},
 
-    println!("From {:?}", id);
-    let mut buffer = [0; 1024];
-    
+    }
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut buffer = String::new();;
 
     loop {
-        match stream.read(&mut buffer) {
+        buffer.clear();
+
+        match reader.read_line(&mut buffer) {
             Ok(0) => {
-                println!("ZZZ");
+                println!("Client {} disconnected", stream.peer_addr()?);
                 break;
-            },
-            Ok(n) => {
-                let command = String::from_utf8_lossy(&buffer[0..n]);
-                let command = command.trim().to_string();
-                match cli(command, Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), Some(&stream)) {
+            }
+
+            Ok(_) => {
+                let command = buffer.trim();
+                println!("Client {}: {}", stream.peer_addr()?, command);
+
+                match cli(command.to_string(), Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), Some(&stream)) {
                     Ok(1) => continue,
                     Ok(2) => break,
                     Ok(3) => {
@@ -2202,14 +2212,10 @@ fn handle_stream(id: usize, mut stream: TcpStream, wal_file_path: &str, txd_coun
                 }
 
                 stream.write_all(b"\n")?;
-
-                if *&buffer[n-1] == 10 {
-                    continue;
-                }
             }
 
             Err(e) => {
-                println!("Error reading from stream: {}", e);
+                println!("Error reading from {}: {}", stream.peer_addr()?, e);
                 break;
             }
         }
@@ -2279,19 +2285,16 @@ fn is_file_empty(file_path: &str) -> bool {
     }
 }
 
-
-
 impl Node {
+    /// Pretty print the entire tree with all versions
     pub fn print_tree(&self) {
-        self.print_tree_recursive("", true, 0, None);
+        println!("B-Tree Structure (All Versions)");
+        println!("{}", "=".repeat(50));
+        self.print_tree_recursive("", true, 0);
+        println!();
     }
 
-    pub fn print_tree_for_transaction(&self, tx_id: u32) {
-        self.print_tree_recursive("", true, 0, Some(tx_id));
-    }
-
-    fn print_tree_recursive(&self, prefix: &str, is_last: bool, depth: usize, tx_id: Option<u32>) {
-        // Print current node
+    fn print_tree_recursive(&self, prefix: &str, is_last: bool, depth: usize) {
         let connector = if depth == 0 {
             "Root"
         } else if is_last {
@@ -2300,66 +2303,53 @@ impl Node {
             "├── "
         };
 
-        println!(
-            "{}{}Node(rank: {}) [{}]",
-            prefix,
-            connector,
-            self.rank,
-            self.format_items(tx_id)
-        );
+        println!("{}{}Node(rank: {}) [{}]",
+                 prefix,
+                 connector,
+                 self.rank,
+                 self.format_items());
 
-        // Prepare prefix for children
         let child_prefix = if depth == 0 {
             String::new()
         } else {
             format!("{}{}", prefix, if is_last { "    " } else { "│   " })
         };
 
-        // Print children
         for (i, child_arc) in self.children.iter().enumerate() {
             let is_last_child = i == self.children.len() - 1;
 
             match child_arc.read() {
                 Ok(child) => {
-                    child.print_tree_recursive(&child_prefix, is_last_child, depth + 1, tx_id);
+                    child.print_tree_recursive(&child_prefix, is_last_child, depth + 1);
                 }
                 Err(_) => {
-                    println!(
-                        "{}{}[POISONED RWLOCK]",
-                        child_prefix,
-                        if is_last_child {
-                            "└── "
-                        } else {
-                            "├── "
-                        }
-                    );
+                    println!("{}{}[POISONED RWLOCK]",
+                             child_prefix,
+                             if is_last_child { "└── " } else { "├── " });
                 }
             }
         }
     }
 
-    fn format_items(&self, tx_id: Option<u32>) -> String {
+    fn format_items(&self) -> String {
         if self.input.is_empty() {
             return "empty".to_string();
         }
 
-        let items: Vec<String> = self
-            .input
+        let items: Vec<String> = self.input
             .iter()
             .map(|item| {
-                let visible_versions = if let Some(tx) = tx_id {
-                    self.format_visible_versions(&item.version, tx)
-                } else {
-                    self.format_all_versions(&item.version)
-                };
-                format!("{}:{} (rank: {})", item.key, visible_versions, item.rank)
+                format!("{}:{} (r:{})",
+                        item.key,
+                        self.format_versions(&item.version),
+                        item.rank)
             })
             .collect();
 
         items.join(", ")
     }
 
-    fn format_all_versions(&self, versions: &[Version]) -> String {
+    fn format_versions(&self, versions: &[Version]) -> String {
         if versions.is_empty() {
             return "[]".to_string();
         }
@@ -2367,124 +2357,42 @@ impl Node {
         let version_strs: Vec<String> = versions
             .iter()
             .map(|v| {
-                let xmax_str = match v.xmax {
-                    Some(xmax) => format!("{}", xmax),
-                    None => "∞".to_string(),
-                };
-                format!("{}[{}-{}]", v.value, v.xmin, xmax_str)
+                let xmax_str = v.xmax
+                    .map(|x| x.to_string())
+                    .unwrap_or_else(|| "∞".to_string());
+                format!("\"{}\"[{}-{}]", v.value, v.xmin, xmax_str)
             })
             .collect();
 
         format!("[{}]", version_strs.join(", "))
     }
 
-    fn format_visible_versions(&self, versions: &[Version], tx_id: u32) -> String {
-        let visible_versions: Vec<&Version> = versions
-            .iter()
-            .filter(|v| self.is_version_visible(v, tx_id))
-            .collect();
-
-        if visible_versions.is_empty() {
-            return "[DELETED]".to_string();
-        }
-
-        // Get the most recent visible version
-        let latest_version = visible_versions.iter().max_by_key(|v| v.xmin).unwrap();
-
-        format!("{}", latest_version.value)
-    }
-
-    fn is_version_visible(&self, version: &Version, tx_id: u32) -> bool {
-        // Version is visible if:
-        // 1. It was created before or by this transaction (xmin <= tx_id)
-        // 2. It wasn't deleted, or was deleted after this transaction (xmax is None or xmax > tx_id)
-        version.xmin <= tx_id && version.xmax.map_or(true, |xmax| xmax > tx_id)
-    }
-
-    /// Alternative compact horizontal view
-    pub fn print_compact(&self) {
-        self.print_compact_for_transaction(None);
-    }
-
-    /// Compact view for specific transaction
-    pub fn print_compact_for_transaction(&self, tx_id: Option<u32>) {
-        println!(
-            "B-Tree Structure{}:",
-            tx_id.map(|tx| format!(" (TX: {})", tx)).unwrap_or_default()
-        );
-        println!("{}", "=".repeat(50));
-        self.print_compact_recursive(0, tx_id);
-    }
-
-    fn print_compact_recursive(&self, level: usize, tx_id: Option<u32>) {
-        let indent = "  ".repeat(level);
-        println!(
-            "{}Level {}: [{}] (rank: {})",
-            indent,
-            level,
-            self.format_items(tx_id),
-            self.rank
-        );
-
-        for (i, child_arc) in self.children.iter().enumerate() {
-            match child_arc.read() {
-                Ok(child) => {
-                    if i == 0 && !self.children.is_empty() {
-                        println!("{}Children:", "  ".repeat(level + 1));
-                    }
-                    child.print_compact_recursive(level + 1, tx_id);
-                }
-                Err(_) => {
-                    println!("{}[POISONED RWLOCK]", "  ".repeat(level + 1));
-                }
-            }
-        }
-    }
-
-    /// Tree statistics
+    /// Print tree statistics
     pub fn print_stats(&self) {
-        self.print_stats_for_transaction(None);
-    }
-
-    /// Tree statistics for specific transaction
-    pub fn print_stats_for_transaction(&self, tx_id: Option<u32>) {
-        let stats = self.calculate_stats(tx_id);
-        println!(
-            "Tree Statistics{}:",
-            tx_id.map(|tx| format!(" (TX: {})", tx)).unwrap_or_default()
-        );
+        let stats = self.calculate_stats();
+        println!("Tree Statistics:");
         println!("├── Total nodes: {}", stats.total_nodes);
         println!("├── Tree height: {}", stats.height);
         println!("├── Total keys: {}", stats.total_keys);
-        println!("├── Visible keys: {}", stats.visible_keys);
         println!("├── Total versions: {}", stats.total_versions);
         println!("├── Leaf nodes: {}", stats.leaf_nodes);
         println!("└── Internal nodes: {}", stats.internal_nodes);
+        println!();
     }
 
-    fn calculate_stats(&self, tx_id: Option<u32>) -> TreeStats {
+    fn calculate_stats(&self) -> TreeStats {
         let mut stats = TreeStats::default();
-        self.calculate_stats_recursive(&mut stats, 0, tx_id);
+        self.calculate_stats_recursive(&mut stats, 0);
         stats
     }
 
-    fn calculate_stats_recursive(&self, stats: &mut TreeStats, depth: usize, tx_id: Option<u32>) {
+    fn calculate_stats_recursive(&self, stats: &mut TreeStats, depth: usize) {
         stats.total_nodes += 1;
         stats.total_keys += self.input.len();
         stats.height = stats.height.max(depth + 1);
 
-        // Count versions and visible keys
         for item in &self.input {
             stats.total_versions += item.version.len();
-            if let Some(tx) = tx_id {
-                let has_visible_version =
-                    item.version.iter().any(|v| self.is_version_visible(v, tx));
-                if has_visible_version {
-                    stats.visible_keys += 1;
-                }
-            } else {
-                stats.visible_keys += 1; // All keys are "visible" when no tx specified
-            }
         }
 
         if self.children.is_empty() {
@@ -2493,85 +2401,7 @@ impl Node {
             stats.internal_nodes += 1;
             for child_arc in &self.children {
                 if let Ok(child) = child_arc.read() {
-                    child.calculate_stats_recursive(stats, depth + 1, tx_id);
-                }
-            }
-        }
-    }
-
-    /// Print version history for debugging
-    pub fn print_version_history(&self) {
-        println!("Version History:");
-        println!("{}", "=".repeat(60));
-        self.print_version_history_recursive("", true, 0);
-    }
-
-    fn print_version_history_recursive(&self, prefix: &str, is_last: bool, depth: usize) {
-        let connector = if depth == 0 {
-            "Root"
-        } else if is_last {
-            "└── "
-        } else {
-            "├── "
-        };
-
-        println!("{}{}Node(rank: {})", prefix, connector, self.rank);
-
-        let child_prefix = if depth == 0 {
-            String::new()
-        } else {
-            format!("{}{}", prefix, if is_last { "    " } else { "│   " })
-        };
-
-        // Print detailed version info for each item
-        for (i, item) in self.input.iter().enumerate() {
-            let item_connector = if i == self.input.len() - 1 && self.children.is_empty() {
-                "└── "
-            } else {
-                "├── "
-            };
-
-            println!(
-                "{}{}Key {}: (rank: {})",
-                child_prefix, item_connector, item.key, item.rank
-            );
-
-            for (v_idx, version) in item.version.iter().enumerate() {
-                let version_connector = if v_idx == item.version.len() - 1 {
-                    "    └── "
-                } else {
-                    "    ├── "
-                };
-
-                let xmax_str = match version.xmax {
-                    Some(xmax) => format!("{}", xmax),
-                    None => "∞".to_string(),
-                };
-                println!(
-                    "{}{}\"{}\" [TX {}-{}]",
-                    child_prefix, version_connector, version.value, version.xmin, xmax_str
-                );
-            }
-        }
-
-        // Print children
-        for (i, child_arc) in self.children.iter().enumerate() {
-            let is_last_child = i == self.children.len() - 1;
-
-            match child_arc.read() {
-                Ok(child) => {
-                    child.print_version_history_recursive(&child_prefix, is_last_child, depth + 1);
-                }
-                Err(_) => {
-                    println!(
-                        "{}{}[POISONED RWLOCK]",
-                        child_prefix,
-                        if is_last_child {
-                            "└── "
-                        } else {
-                            "├── "
-                        }
-                    );
+                    child.calculate_stats_recursive(stats, depth + 1);
                 }
             }
         }
@@ -2583,7 +2413,6 @@ struct TreeStats {
     total_nodes: usize,
     height: usize,
     total_keys: usize,
-    visible_keys: usize,
     total_versions: usize,
     leaf_nodes: usize,
     internal_nodes: usize,
