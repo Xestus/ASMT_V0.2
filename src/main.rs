@@ -1,24 +1,16 @@
-extern crate rand;
-use std::cell::RefCell;
-use std::io::{BufRead, BufReader, Write};
-use clap::Parser;
+use std::io::{BufRead, BufReader, Write, Read};
 use once_cell::sync::*;
 use regex::Regex;
 use std::collections::HashMap;
-use std::fs::File;
-use std::fs::OpenOptions;
-use std::io::Read;
-use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, RwLock, Mutex};
-use std::thread;
-use std::{fs, io};
+use std::fs::{File, OpenOptions};
+use std::sync::{mpsc, Arc, RwLock, Mutex, atomic::{AtomicUsize, Ordering} };
+use std::{io, fs, thread, thread::JoinHandle};
 use std::net::{TcpListener, TcpStream};
-use std::thread::JoinHandle;
-use log::log;
+use std::net::SocketAddr;
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
 static LAST_ACTIVE_TXD: AtomicUsize = AtomicUsize::new(100);
+
 static CHECKPOINT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, PartialEq, Ord, PartialOrd, Eq, Hash)]
@@ -43,15 +35,20 @@ struct Node {
 }
 
 #[derive(Debug, Clone, PartialEq, Ord, PartialOrd, Eq, Hash)]
-enum TransactionStatus {
-    Active,
-    Committed,
-    Aborted,
+enum TransactionStatus { Active, Committed, Aborted, }
+
+#[derive(Debug)]
+struct TransactionItems {
+    status: TransactionStatus,
+    socket_addr: SocketAddr,
+    last_txd: u32,
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 struct Transaction {
-    status: HashMap<u32, TransactionStatus>,
+    items: HashMap<u32, TransactionItems>,
+    ip_txd: HashMap<SocketAddr, u32>,
 }
+
 
 #[derive(Debug)]
 enum I32OrString {
@@ -1548,7 +1545,7 @@ impl Node {
         Ok(())
     }
 
-    fn select_key(node: Arc<RwLock<Node>>, k: u32, txd: u32, status: Arc<RwLock<Transaction>>, ) -> Option<String> {
+    fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u32, status: Arc<RwLock<Transaction>> ) -> Option<String> {
         // HAck: Looks inefficient, redo it later
         let mut result = Vec::new();
         match Node::key_position(node, k) {
@@ -1566,21 +1563,22 @@ impl Node {
         for i in 0..result.iter().len() {
             let result_max = result[i].xmax;
             let result_min = result[i].xmin;
-            let min_status = status_read_guard.status.get(&result[i].xmin);
+            let min_status = status_read_guard.items.get(&result[i].xmin);
+            // let min_status = status_read_guard.status.get(&result[i].xmin);
 
             let (mut visible_xmax, mut visible_xmin) = (false, false);
 
             match result_max {
                 Some(xmax) => {
-                    if xmax >= txd {
+                    if xmax >= last_txd {
                         visible_xmax = true;
                         // visible -- xmax >= current_txd_id
                     }
 
-                    let max_status = status_read_guard.status.get(&xmax);
+                    let max_status = status_read_guard.items.get(&xmax);
 
                     if let Some(max_temp_status) = max_status {
-                        if let TransactionStatus::Active = max_temp_status {
+                        if let TransactionStatus::Active = max_temp_status.status {
                             visible_xmax = true;
                             // visible -- xmax == ACTIVE
                         }
@@ -1590,18 +1588,18 @@ impl Node {
                     visible_xmax = true;
                     // visible -- xmax == None
 
-                    if result_min == txd {
+                    if result_min == current_txd {
                         return Some(result[i].value.clone());
                     }
                 }
             }
 
-            if (result_min == txd) {
+            if (result_min == last_txd) {
                 visible_xmin = true;
                 // visible -- min == current_txd_id
             } else if let Some(min_temp_status) = min_status {
-                if let TransactionStatus::Committed = min_temp_status
-                    && result_min < txd
+                if let TransactionStatus::Committed = min_temp_status.status
+                    && result_min < last_txd
                 {
                     visible_xmin = true;
                     // visible
@@ -1721,7 +1719,7 @@ impl I32OrString {
     }
 }
 
-
+/*
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
 struct ThreadPool {
@@ -1765,7 +1763,7 @@ impl Worker {
 
         Worker{id, handle}
     }
-}
+}*/
 
 fn main() -> io::Result<()> {
     NODE_SIZE.set(4).expect("Failed to set size");
@@ -1773,7 +1771,7 @@ fn main() -> io::Result<()> {
     let wal_file_path = "/home/_meringue/RustroverProjects/ASMT/WAL.txt";
     let mut new_node = Node::new();
 
-    let current_transaction = Arc::new(RwLock::new(Transaction { status: HashMap::new(), }));
+    let current_transaction = Arc::new(RwLock::new(Transaction { items: HashMap::new(), ip_txd: HashMap::new() }));
 
     match Node::deserialize(serialized_file_path) {
         Ok(node) =>  new_node = node,
@@ -1799,15 +1797,12 @@ fn main() -> io::Result<()> {
         }
     });
 
-    println!("{:?}", new_node.read().unwrap().print_stats());
-    println!("{:?}", new_node.read().unwrap().print_tree());
-
     let listener = TcpListener::bind("127.0.0.1:8081")?;
     println!("Server listening on port 8080");
-    let pool = ThreadPool::new(4);
 
-
-/*    for (id, stream) in listener.incoming().enumerate() {
+/*
+      let pool = ThreadPool::new(4);
+  for (id, stream) in listener.incoming().enumerate() {
         let cloned_node = Arc::clone(&new_node);
         let cloned_file = Arc::clone(&file);
         let cloned_transaction = Arc::clone(&current_transaction);
@@ -1888,11 +1883,6 @@ fn checkpoint(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path
 
 fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, mut stream: Option<&TcpStream> ) -> io::Result<(u8)> {
     println!("{:?}", cli_input);
-    let cli_input = cli_input.trim();
-
-    if cli_input.is_empty() { return Ok(1); }
-
-    let args = cli_input.split_whitespace().collect::<Vec<&str>>();
 
     let log_message = |message: &str|{
         if let Some(s) = stream {
@@ -1907,193 +1897,301 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
         }
     };
 
-    if args.is_empty() { return Ok(1); }
-    match args[0].to_lowercase().as_str() {
-        "begin" => {
-            if args.len() != 1 {
-                log_message("Invalid argument");
+    // todo: temp clone.
+    match parse_string(cli_input.clone()) {
+        Ok((addr, args_string)) => {
+            let args: Vec<&str> = args_string.iter().map(|s| s.as_str()).collect();
 
-                return Ok(1);
-            }
+            if args.is_empty() { return Ok(1); }
+            match args[0].to_lowercase().as_str() {
+                "begin" => {
+                    if args.len() != 2 {
+                        log_message("Invalid argument");
 
-            Node::flush_to_wal(Arc::clone(&file), args)?;
-            let mut mut_txd_count = txd_count.write().unwrap();
-            *mut_txd_count += 1;
-            current_transaction.write().unwrap().status.insert(*mut_txd_count, TransactionStatus::Active);
-        }
-
-        "commit" => {
-            if args.len() != 1 {
-                log_message("Invalid argument");
-                return Ok(1);
-            }
-
-            let mut_txd_count = txd_count.read().unwrap();
-
-            LAST_ACTIVE_TXD.store(*mut_txd_count as usize, Ordering::SeqCst);
-            Node::flush_to_wal(Arc::clone(&file), args)?;
-            current_transaction.write().unwrap().status.insert(*mut_txd_count, TransactionStatus::Committed);
-        }
-
-        "abort" => {
-            if args.len() != 1 {
-                log_message("Invalid argument");
-                return Ok(1);
-            }
-            Node::flush_to_wal(Arc::clone(&file), args)?;
-
-            let mut_txd_count = txd_count.read().unwrap();
-            current_transaction.write().unwrap().status.insert(*mut_txd_count, TransactionStatus::Aborted);
-        }
-
-        "insert" => {
-            if args.len() != 3 {
-                log_message("Invalid argument");
-                return Ok(1);
-            }
-
-            Node::flush_to_wal(Arc::clone(&file), args.clone())?;
-
-            let key = args[1].parse::<u32>().expect("Invalid argument");
-            let value = args[2].parse::<String>().expect("Invalid argument");
-
-            let mut_txd_count = txd_count.read().unwrap();
-            let _ = Node::insert(Arc::clone(&new_node), key, value, *mut_txd_count);
-
-            CHECKPOINT_COUNTER.fetch_add(1, Ordering::SeqCst);
-        }
-
-        "update" => {
-            if args.len() != 3 {
-                log_message("Invalid argument");
-                return Ok(1);
-            }
-
-            let key = args[1].parse::<u32>().expect("Invalid argument");
-            let value = args[2].parse::<String>().expect("Invalid argument");
-
-            let mut_txd_count = txd_count.read().unwrap();
-            match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), *mut_txd_count, ) {
-                Some(_) => {
-                    Node::flush_to_wal(Arc::clone(&file), args.clone())?;
-                }
-                None => log_message("Key not found"),
-
-            }
-        }
-
-        "delete" => {
-            if args.len() != 2 {
-                log_message("Invalid argument");
-                return Ok(1);
-            }
-
-            let key = args[1].parse::<u32>().expect("Invalid argument");
-
-            let mut_txd_count = txd_count.read().unwrap();
-            match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, *mut_txd_count) {
-                Some(_) => {
-                    Node::flush_to_wal(Arc::clone(&file), args.clone())?;
-                }
-                None => log_message("Key not found"),
-            }
-        }
-
-        "checkpoint" => {
-            if args.len() != 1 {
-                log_message("Invalid argument");
-                return Ok(1);
-            }
-
-            return Ok(3);
-        }
-
-        "select" => {
-            if args.len() != 2 {
-                log_message("Invalid argument");
-                return Ok(1);
-            }
-            let key = args[1].parse::<u32>().expect("Invalid argument");
-
-            let mut_txd_count = txd_count.read().unwrap();
-            let messages ;
-            match Node::select_key(Arc::clone(&new_node), key, *mut_txd_count, Arc::clone(&current_transaction)) {
-                Some(value) => {
-                    messages = format!("Value: {:?}", value)
-                },
-                None =>  {
-                    messages = String::from("Key not found")
-                },
-            }
-
-            log_message(messages.as_str());
-        }
-
-        "dump" => {
-            if args.len() != 2 {
-                log_message("Invalid argument");
-                return Ok(1);
-            }
-            let key = args[1].parse::<u32>().expect("Invalid argument");
-
-            let mut messages= String::new();
-            match Node::key_position(Arc::clone(&new_node), key) {
-                Some(value) => {
-                    let mut message_vector = Vec::new();
-
-                    for i in value.iter() {
-                        let k ;
-                        if let Some(xmax) = i.xmax {
-                            k = format!("Value: {:?} [xmin: {} -- xmax: {}]", i.value, i.xmin, xmax);
-                        } else {
-                            k = format!("Value: {:?} [xmin: {} -- xmax: ∞]", i.value, i.xmin);
-                        }
-
-                        message_vector.push(k);
+                        return Ok(1);
                     }
 
-                    messages = message_vector.join(" ");
+                    // Only new key if the addr has a committed status or is empty (1st time), or else ask to commit the active transaction.
+
+                    Node::flush_to_wal(Arc::clone(&file), args)?;
+                    let mut mut_txd_count = txd_count.write().unwrap();
+                    *mut_txd_count += 1;
+
+                    println!("Just");
+                    match current_transaction.read().unwrap().ip_txd.get(&addr) {
+                        Some(x) => {
+                            println!("Pippa");
+                            if current_transaction.read().unwrap().items.get(x).unwrap().status == TransactionStatus::Committed {
+                                println!("Committed");
+                                current_transaction.write().unwrap().items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, socket_addr: addr, last_txd: *x });
+                                println!("Zabra");
+                            } else {
+                                log_message("Previous transaction is still active. Close it to start a new one.");
+                            }
+
+                        }
+                        None => {
+                            println!("THIS?");
+                            current_transaction.write().unwrap().items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, socket_addr: addr, last_txd: 0 });
+                            println!("NOOOOO");
+                        }
+                    }
+                    println!("ASwqe");
+
+                    // current_transaction.write().unwrap().status.insert(*mut_txd_count, TransactionStatus::Active);
                 }
 
-                None => {
-                    messages = String::from("Key not found")
-                },
-            }
+                "commit" => {
+                    if args.len() != 2 {
+                        log_message("Invalid argument");
+                        return Ok(1);
+                    }
 
-            log_message(messages.as_str());
-        }
+                    Node::flush_to_wal(Arc::clone(&file), args)?;
 
-        "tree" => {
-            if args.len() != 1 {
-                log_message("Invalid argument");
-                return Ok(1);
-            }
+                    match current_transaction.read().unwrap().ip_txd.get(&addr) {
+                        Some(x) => {
+                            current_transaction.write().unwrap().items.insert(*x, TransactionItems {status: TransactionStatus::Committed, socket_addr: addr, last_txd: *x });
+                        }
+                        None => {
+                            println!("Active transaction not found. Commit failed.");
+                            return Ok(1);
+                        }
+                    }
 
-            let message = format!("{:?}", new_node.read().unwrap());
-            let message_2 = format!("{:?}", new_node.read().unwrap().print_tree());
-            println!("{:?}", new_node.read().unwrap().print_tree());
-            log_message(message.as_str());
-            log_message(message_2.as_str());
-        }
+                    // let mut_txd_count = txd_count.read().unwrap();
+                    // LAST_ACTIVE_TXD.store(*mut_txd_count as usize, Ordering::SeqCst);
+                    // current_transaction.write().unwrap().status.insert(*mut_txd_count, TransactionStatus::Committed);
+                    // current_transaction.write().unwrap().last_txd = mut_txd_count.clone();
+                }
 
-        "stats" => {
-            if args.len() != 1 {
-                log_message("Invalid argument");
-                return Ok(1);
-            }
+                "abort" => {
+                    if args.len() != 2 {
+                        log_message("Invalid argument");
+                        return Ok(1);
+                    }
+                    Node::flush_to_wal(Arc::clone(&file), args)?;
 
-            let message = format!("{:?}", new_node.read().unwrap().print_stats());
-            log_message(message.as_str());
-        }
+                    match current_transaction.read().unwrap().ip_txd.get(&addr) {
+                        Some(x) => {
+                            current_transaction.write().unwrap().items.insert(*x, TransactionItems {status: TransactionStatus::Aborted, socket_addr: addr, last_txd: *x });
+                        }
+                        None => {
+                            println!("Active transaction not found. Abort failed.");
+                            return Ok(1);
+                        }
+                    }
+                    // let mut_txd_count = txd_count.read().unwrap();
+                    // current_transaction.write().unwrap().status.insert(*mut_txd_count, TransactionStatus::Aborted);
+                }
 
-        "help" => {
-            if args.len() != 1 {
-                log_message("Invalid argument");
-                return Ok(1);
-            }
+                "insert" => {
+                    if args.len() != 4 {
+                        log_message("Invalid argument");
+                        return Ok(1);
+                    }
 
-            let messages = {
-                "insert <key> <value>  - Insert a key-value pair\n
+                    Node::flush_to_wal(Arc::clone(&file), args.clone())?;
+
+                    let key = args[1].parse::<u32>().expect("Invalid argument");
+                    let value = args[2].parse::<String>().expect("Invalid argument");
+
+                    match current_transaction.read().unwrap().ip_txd.get(&addr) {
+                        Some(x) => {
+                            let _ = Node::insert(Arc::clone(&new_node), key, value, *x);
+                        }
+                        None => {
+                            println!("Active transaction not found. Insert failed.");
+                            return Ok(1);
+                        }
+                    }
+
+                    // let mut_txd_count = txd_count.read().unwrap();
+                    // let _ = Node::insert(Arc::clone(&new_node), key, value, *mut_txd_count);
+
+                    CHECKPOINT_COUNTER.fetch_add(1, Ordering::SeqCst);
+                }
+
+                "update" => {
+                    if args.len() != 4 {
+                        log_message("Invalid argument");
+                        return Ok(1);
+                    }
+
+                    let key = args[1].parse::<u32>().expect("Invalid argument");
+                    let value = args[2].parse::<String>().expect("Invalid argument");
+
+                    match current_transaction.read().unwrap().ip_txd.get(&addr) {
+                        Some(x) => {
+                            match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), *x) {
+                                Some(_) => Node::flush_to_wal(Arc::clone(&file), args)?,
+                                None => log_message("Key not found"),
+                            }
+                        }
+                        None => {
+                            println!("Active transaction not found. Update failed.");
+                            return Ok(1);
+                        }
+                    }
+
+                    // let mut_txd_count = txd_count.read().unwrap();
+                    // match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), *mut_txd_count, ) {
+                    //     Some(_) => {
+                    //         Node::flush_to_wal(Arc::clone(&file), args.clone())?;
+                    //     }
+                    //     None => log_message("Key not found"),
+                    // }
+                }
+
+                "delete" => {
+                    if args.len() != 3 {
+                        log_message("Invalid argument");
+                        return Ok(1);
+                    }
+
+                    let key = args[1].parse::<u32>().expect("Invalid argument");
+
+                    match current_transaction.read().unwrap().ip_txd.get(&addr) {
+                        Some(x) => {
+                            match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, *x) {
+                                Some(_) => {
+                                    Node::flush_to_wal(Arc::clone(&file), args.clone())?;
+                                }
+                                None => log_message("Key not found"),
+                            }
+                        }
+                        None => {
+                            println!("Active transaction not found. Update failed.");
+                            return Ok(1);
+                        }
+                    }
+
+                    // let mut_txd_count = txd_count.read().unwrap();
+                    // match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, *mut_txd_count) {
+                    //     Some(_) => {
+                    //         Node::flush_to_wal(Arc::clone(&file), args.clone())?;
+                    //     }
+                    //     None => log_message("Key not found"),
+                    // }
+                }
+
+                "checkpoint" => {
+                    if args.len() != 2 {
+                        log_message("Invalid argument");
+                        return Ok(1);
+                    }
+
+                    return Ok(3);
+                }
+
+                "select" => {
+                    if args.len() != 3 {
+                        log_message("Invalid argument");
+                        return Ok(1);
+                    }
+                    let key = args[1].parse::<u32>().expect("Invalid argument");
+
+                    match current_transaction.read().unwrap().ip_txd.get(&addr) {
+                        Some(x) => {
+                            let last_txd = current_transaction.read().unwrap().items.get(x).unwrap().last_txd;
+
+                            let messages ;
+                            match Node::select_key(Arc::clone(&new_node), key, last_txd, *x, Arc::clone(&current_transaction)) {
+                                Some(value) => {
+                                    messages = format!("Value: {:?}", value)
+                                },
+                                None =>  {
+                                    messages = String::from("Key not found")
+                                },
+                            }
+
+                            log_message(messages.as_str());
+
+                        }
+                        None => {}
+                    }
+
+
+                    // let current_txd_count = txd_count.read().unwrap();
+                    // let last_txd = current_transaction.read().unwrap().last_txd;
+                    // let messages ;
+                    // match Node::select_key(Arc::clone(&new_node), key, last_txd, *current_txd_count, Arc::clone(&current_transaction)) {
+                    //     Some(value) => {
+                    //         messages = format!("Value: {:?}", value)
+                    //     },
+                    //     None =>  {
+                    //         messages = String::from("Key not found")
+                    //     },
+                    // }
+                    //
+                    // log_message(messages.as_str());
+                }
+
+                "dump" => {
+                    if args.len() != 3 {
+                        log_message("Invalid argument");
+                        return Ok(1);
+                    }
+                    let key = args[1].parse::<u32>().expect("Invalid argument");
+
+                    let mut messages= String::new();
+                    match Node::key_position(Arc::clone(&new_node), key) {
+                        Some(value) => {
+                            let mut message_vector = Vec::new();
+
+                            for i in value.iter() {
+                                let k ;
+                                if let Some(xmax) = i.xmax {
+                                    k = format!("Value: {:?} [xmin: {} -- xmax: {}]", i.value, i.xmin, xmax);
+                                } else {
+                                    k = format!("Value: {:?} [xmin: {} -- xmax: ∞]", i.value, i.xmin);
+                                }
+
+                                message_vector.push(k);
+                            }
+
+                            messages = message_vector.join(" ");
+                        }
+
+                        None => {
+                            messages = String::from("Key not found")
+                        },
+                    }
+
+                    log_message(messages.as_str());
+                }
+
+                "tree" => {
+                    if args.len() != 2 {
+                        log_message("Invalid argument");
+                        return Ok(1);
+                    }
+
+                    let message = format!("{:?}", new_node.read().unwrap());
+                    let message_2 = format!("{:?}", new_node.read().unwrap().print_tree());
+                    println!("{:?}", new_node.read().unwrap().print_tree());
+                    log_message(message.as_str());
+                    log_message(message_2.as_str());
+                }
+
+                "stats" => {
+                    if args.len() != 2 {
+                        log_message("Invalid argument");
+                        return Ok(1);
+                    }
+
+                    let message = format!("{:?}", new_node.read().unwrap().print_stats());
+                    log_message(message.as_str());
+                }
+
+                "help" => {
+                    if args.len() != 2 {
+                        log_message("Invalid argument");
+                        return Ok(1);
+                    }
+
+                    let messages = {
+                        "insert <key> <value>  - Insert a key-value pair\n
                  update <key> <value>  - Update a key-value pair\n
                  select <key>          - Get the visible value for the key\n
                  dump <key>            - Get all the values for the key\n
@@ -2105,27 +2203,35 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
                  stats                 - Show B-Tree Stats\n
                  help                  - List out all the commands\n
                  exit                  - Exit the program"
-            };
+                    };
 
-            log_message(messages);
-        }
+                    log_message(messages);
+                }
 
-        "exit" => {
-            if args.len() != 1 {
-                log_message("Invalid argument");
-                return Ok(1);
+                // Make "exit" quit the client, not the server
+                "exit" => {
+                    if args.len() != 2 {
+                        log_message("Invalid argument");
+                        return Ok(1);
+                    }
+
+                    log_message("Invalid argument");
+                    return Ok(2);
+                }
+
+                _ => {
+
+                    let message = format!("Unknown command: {}. Type 'help' for available commands.", args[0]);
+                    log_message(message.as_str());
+                },
             }
 
-            log_message("Invalid argument");
-            return Ok(2);
         }
 
-        _ => {
-
-            let message = format!("Unknown command: {}. Type 'help' for available commands.", args[0]);
-            log_message(message.as_str());
-        },
+        Err(e) => println!("Parse Error: {}", e),
     }
+
+
 
     Ok(0)
 }
@@ -2170,15 +2276,13 @@ fn initial_wal_invoke(wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_
 fn handle_stream(id: Option<usize>, mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>) -> io::Result<()> {
     // In session project.
     // println!("Enter 'Help' for available commands & 'exit' to quit.");
-
-    print!("Client ID: {} ", stream.peer_addr()?);
     match id {
         Some(id) => println!("Fron ID: {:?}", id),
         None => {},
-
     }
+
     let mut reader = BufReader::new(stream.try_clone()?);
-    let mut buffer = String::new();;
+    let mut buffer = String::new();
 
     loop {
         buffer.clear();
@@ -2190,10 +2294,14 @@ fn handle_stream(id: Option<usize>, mut stream: TcpStream, wal_file_path: &str, 
             }
 
             Ok(_) => {
-                let command = buffer.trim();
-                println!("Client {}: {}", stream.peer_addr()?, command);
+                let command = buffer.trim().to_string();
 
-                match cli(command.to_string(), Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), Some(&stream)) {
+                let addr = stream.peer_addr()?;
+                let command = format!("{} {}", command, addr);
+
+                println!("Client {}", command);
+
+                match cli(command, Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), Some(&stream)) {
                     Ok(1) => continue,
                     Ok(2) => break,
                     Ok(3) => {
@@ -2202,6 +2310,7 @@ fn handle_stream(id: Option<usize>, mut stream: TcpStream, wal_file_path: &str, 
                     Ok(_) => {}
                     Err(e) => println!("Error: {}", e),
                 }
+                println!("A");
 
                 let metadata = fs::metadata(wal_file_path)?;
                 let size = metadata.len();
@@ -2283,6 +2392,16 @@ fn is_file_empty(file_path: &str) -> bool {
         Ok(metadata) => metadata.len() == 0,
         Err(_) => false,
     }
+}
+
+fn parse_string(input: String) -> Result<(SocketAddr, Vec<String>), Box<dyn std::error::Error>> {
+    let mut args = input.split_whitespace().collect::<Vec<&str>>();
+    let addr = args.last().unwrap().to_string();
+
+    let socket_addr: SocketAddr = addr.parse()?;
+
+    let string_vec: Vec<String> = args.iter().map(|&s| s.to_string()).collect();
+    Ok((socket_addr, string_vec))
 }
 
 impl Node {
