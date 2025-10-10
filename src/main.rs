@@ -1917,27 +1917,26 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
                     let mut mut_txd_count = txd_count.write().unwrap();
                     *mut_txd_count += 1;
 
-                    println!("Just");
-                    match current_transaction.read().unwrap().ip_txd.get(&addr) {
-                        Some(x) => {
-                            println!("Pippa");
-                            if current_transaction.read().unwrap().items.get(x).unwrap().status == TransactionStatus::Committed {
-                                println!("Committed");
-                                current_transaction.write().unwrap().items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, socket_addr: addr, last_txd: *x });
-                                println!("Zabra");
-                            } else {
-                                log_message("Previous transaction is still active. Close it to start a new one.");
-                            }
+                    {
+                        let mut tx = current_transaction.write().unwrap();
 
-                        }
-                        None => {
-                            println!("THIS?");
-                            current_transaction.write().unwrap().items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, socket_addr: addr, last_txd: 0 });
-                            println!("NOOOOO");
+                        match tx.ip_txd.get(&addr) {
+                            Some(&x) => {
+                                let item = tx.items.get(&x);
+                                if let Some(item) = item {
+                                    if item.status == TransactionStatus::Committed {
+                                        tx.items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, socket_addr: addr, last_txd: x });
+                                    } else {
+                                        log_message("Previous transaction is still active. Close it to start a new one.");
+                                    }
+                                }
+                            }
+                            None => {
+                                tx.items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, socket_addr: addr, last_txd: 0 });
+
+                            }
                         }
                     }
-                    println!("ASwqe");
-
                     // current_transaction.write().unwrap().status.insert(*mut_txd_count, TransactionStatus::Active);
                 }
 
@@ -1949,13 +1948,17 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
 
                     Node::flush_to_wal(Arc::clone(&file), args)?;
 
-                    match current_transaction.read().unwrap().ip_txd.get(&addr) {
-                        Some(x) => {
-                            current_transaction.write().unwrap().items.insert(*x, TransactionItems {status: TransactionStatus::Committed, socket_addr: addr, last_txd: *x });
-                        }
-                        None => {
-                            println!("Active transaction not found. Commit failed.");
-                            return Ok(1);
+                    {
+                        let mut tx = current_transaction.write().unwrap();
+
+                        match tx.ip_txd.get(&addr) {
+                            Some(&x) => {
+                                tx.items.insert(x, TransactionItems {status: TransactionStatus::Committed, socket_addr: addr, last_txd: x });
+                            }
+                            None => {
+                                println!("Active transaction not found. Commit failed.");
+                                return Ok(1);
+                            }
                         }
                     }
 
@@ -1972,15 +1975,20 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
                     }
                     Node::flush_to_wal(Arc::clone(&file), args)?;
 
-                    match current_transaction.read().unwrap().ip_txd.get(&addr) {
-                        Some(x) => {
-                            current_transaction.write().unwrap().items.insert(*x, TransactionItems {status: TransactionStatus::Aborted, socket_addr: addr, last_txd: *x });
-                        }
-                        None => {
-                            println!("Active transaction not found. Abort failed.");
-                            return Ok(1);
+                    {
+                        let mut tx = current_transaction.write().unwrap();
+
+                        match tx.ip_txd.get(&addr) {
+                            Some(&x) => {
+                                tx.items.insert(x, TransactionItems {status: TransactionStatus::Aborted, socket_addr: addr, last_txd: x });
+                            },
+                            None => {
+                                println!("Active transaction not found. Abort failed.");
+                                return Ok(1);
+                            }
                         }
                     }
+
                     // let mut_txd_count = txd_count.read().unwrap();
                     // current_transaction.write().unwrap().status.insert(*mut_txd_count, TransactionStatus::Aborted);
                 }
@@ -1995,14 +2003,17 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
 
                     let key = args[1].parse::<u32>().expect("Invalid argument");
                     let value = args[2].parse::<String>().expect("Invalid argument");
+                    {
+                        let mut tx = current_transaction.write().unwrap();
 
-                    match current_transaction.read().unwrap().ip_txd.get(&addr) {
-                        Some(x) => {
-                            let _ = Node::insert(Arc::clone(&new_node), key, value, *x);
-                        }
-                        None => {
-                            println!("Active transaction not found. Insert failed.");
-                            return Ok(1);
+                        match tx.ip_txd.get(&addr) {
+                            Some(&x) => {
+                                let _ = Node::insert(Arc::clone(&new_node), key, value, x);
+                            }
+                            None => {
+                                println!("Active transaction not found. Insert failed.");
+                                return Ok(1);
+                            }
                         }
                     }
 
@@ -2021,17 +2032,22 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
                     let key = args[1].parse::<u32>().expect("Invalid argument");
                     let value = args[2].parse::<String>().expect("Invalid argument");
 
-                    match current_transaction.read().unwrap().ip_txd.get(&addr) {
-                        Some(x) => {
-                            match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), *x) {
-                                Some(_) => Node::flush_to_wal(Arc::clone(&file), args)?,
-                                None => log_message("Key not found"),
+                    {
+                        let mut tx = current_transaction.read().unwrap();
+
+                        match tx.ip_txd.get(&addr) {
+                            Some(x) => {
+                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), *x) {
+                                    Some(_) => Node::flush_to_wal(Arc::clone(&file), args)?,
+                                    None => log_message("Key not found"),
+                                }
+                            }
+                            None => {
+                                println!("Active transaction not found. Update failed.");
+                                return Ok(1);
                             }
                         }
-                        None => {
-                            println!("Active transaction not found. Update failed.");
-                            return Ok(1);
-                        }
+
                     }
 
                     // let mut_txd_count = txd_count.read().unwrap();
@@ -2051,20 +2067,25 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
 
                     let key = args[1].parse::<u32>().expect("Invalid argument");
 
-                    match current_transaction.read().unwrap().ip_txd.get(&addr) {
-                        Some(x) => {
-                            match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, *x) {
-                                Some(_) => {
-                                    Node::flush_to_wal(Arc::clone(&file), args.clone())?;
+                    {
+                        let mut tx = current_transaction.read().unwrap();
+
+                        match tx.ip_txd.get(&addr) {
+                            Some(x) => {
+                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, *x) {
+                                    Some(_) => {
+                                        Node::flush_to_wal(Arc::clone(&file), args.clone())?;
+                                    }
+                                    None => log_message("Key not found"),
                                 }
-                                None => log_message("Key not found"),
+                            }
+                            None => {
+                                println!("Active transaction not found. Update failed.");
+                                return Ok(1);
                             }
                         }
-                        None => {
-                            println!("Active transaction not found. Update failed.");
-                            return Ok(1);
-                        }
                     }
+
 
                     // let mut_txd_count = txd_count.read().unwrap();
                     // match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, *mut_txd_count) {
@@ -2091,25 +2112,30 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
                     }
                     let key = args[1].parse::<u32>().expect("Invalid argument");
 
-                    match current_transaction.read().unwrap().ip_txd.get(&addr) {
-                        Some(x) => {
-                            let last_txd = current_transaction.read().unwrap().items.get(x).unwrap().last_txd;
+                    {
+                        let mut tx = current_transaction.read().unwrap();
 
-                            let messages ;
-                            match Node::select_key(Arc::clone(&new_node), key, last_txd, *x, Arc::clone(&current_transaction)) {
-                                Some(value) => {
-                                    messages = format!("Value: {:?}", value)
-                                },
-                                None =>  {
-                                    messages = String::from("Key not found")
-                                },
+                        match tx.ip_txd.get(&addr) {
+                            Some(&x) => {
+                                let last_txd = tx.items.get(&x).unwrap().last_txd;
+
+                                let messages ;
+                                match Node::select_key(Arc::clone(&new_node), key, last_txd, x, Arc::clone(&current_transaction)) {
+                                    Some(value) => {
+                                        messages = format!("Value: {:?}", value)
+                                    },
+                                    None =>  {
+                                        messages = String::from("Key not found")
+                                    },
+                                }
+
+                                log_message(messages.as_str());
+
                             }
-
-                            log_message(messages.as_str());
-
+                            None => {}
                         }
-                        None => {}
                     }
+
 
 
                     // let current_txd_count = txd_count.read().unwrap();
