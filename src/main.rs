@@ -3,7 +3,7 @@ use once_cell::sync::*;
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::sync::{mpsc, Arc, RwLock, Mutex, atomic::{AtomicUsize, Ordering} };
+use std::sync::{mpsc, Arc, RwLock, atomic::{AtomicUsize, Ordering} };
 use std::{io, fs, thread, thread::JoinHandle};
 use std::net::{TcpListener, TcpStream};
 use std::net::SocketAddr;
@@ -1193,7 +1193,6 @@ impl Node {
 
         let read = BufReader::new(file);
 
-
         let single_bracket = Regex::new(r"^\[[^\]]+\]$").unwrap();
         let double_bracket = Regex::new(r"^\[[^\]]+\]\[[^\]]+\]$").unwrap();
         let triple_bracket = Regex::new(r"^\[[^\]]+\]\[[^\]]+\]\[[^\]]+\]$").unwrap();
@@ -1701,6 +1700,10 @@ impl Node {
 
         Ok(uncommitted_strings)
     }
+
+    fn get_dead_versions(current_transactions: Arc<RwLock<Transaction>> , node: Arc<RwLock<Node>>) -> () {
+
+    }
 }
 
 impl I32OrString {
@@ -1835,7 +1838,7 @@ fn main() -> io::Result<()> {
 
         match stream {
             Ok(stream) => {
-                thread::spawn(move || handle_stream(None, stream, wal_file_path, Arc::clone(&cloned_txd_count), Arc::clone(&cloned_transaction), Arc::clone(&cloned_file), Arc::clone(&cloned_node)));
+                thread::spawn(move || handle_stream(stream, wal_file_path, Arc::clone(&cloned_txd_count), Arc::clone(&cloned_transaction), Arc::clone(&cloned_file), Arc::clone(&cloned_node)));
             }
             Err(e) => println!("Error: {}", e),
         }
@@ -1922,6 +1925,7 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
+                                tx.ip_txd.insert(addr, *mut_txd_count);
                                 let item = tx.items.get(&x);
                                 if let Some(item) = item {
                                     if item.status == TransactionStatus::Committed {
@@ -1932,6 +1936,7 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
                                 }
                             }
                             None => {
+                                tx.ip_txd.insert(addr, *mut_txd_count);
                                 tx.items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, socket_addr: addr, last_txd: 0 });
 
                             }
@@ -1953,7 +1958,16 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
-                                tx.items.insert(x, TransactionItems {status: TransactionStatus::Committed, socket_addr: addr, last_txd: x });
+                                let item = tx.items.get(&x);
+                                if let Some(item) = item {
+                                    if item.status == TransactionStatus::Active {
+                                        tx.items.insert(x, TransactionItems {status: TransactionStatus::Committed, socket_addr: addr, last_txd: x });
+                                    } else {
+                                        println!("Active transaction not found. Commit failed.");
+                                        return Ok(1);
+                                    }
+                                }
+
                             }
                             None => {
                                 println!("Active transaction not found. Commit failed.");
@@ -1980,7 +1994,15 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
-                                tx.items.insert(x, TransactionItems {status: TransactionStatus::Aborted, socket_addr: addr, last_txd: x });
+                                let item = tx.items.get(&x);
+                                if let Some(item) = item {
+                                    if item.status == TransactionStatus::Active {
+                                        tx.items.insert(x, TransactionItems {status: TransactionStatus::Aborted, socket_addr: addr, last_txd: x });
+                                    } else {
+                                        println!("Active transaction not found. Commit failed.");
+                                        return Ok(1);
+                                    }
+                                }
                             },
                             None => {
                                 println!("Active transaction not found. Abort failed.");
@@ -2004,7 +2026,7 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
                     let key = args[1].parse::<u32>().expect("Invalid argument");
                     let value = args[2].parse::<String>().expect("Invalid argument");
                     {
-                        let mut tx = current_transaction.write().unwrap();
+                        let tx = current_transaction.write().unwrap();
 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
@@ -2299,13 +2321,9 @@ fn initial_wal_invoke(wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_
 
 }
 
-fn handle_stream(id: Option<usize>, mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>) -> io::Result<()> {
+fn handle_stream(mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>) -> io::Result<()> {
     // In session project.
     // println!("Enter 'Help' for available commands & 'exit' to quit.");
-    match id {
-        Some(id) => println!("Fron ID: {:?}", id),
-        None => {},
-    }
 
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut buffer = String::new();
