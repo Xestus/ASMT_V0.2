@@ -7,6 +7,7 @@ use std::sync::{mpsc, Arc, RwLock, atomic::{AtomicUsize, Ordering} };
 use std::{io, fs, thread, thread::JoinHandle};
 use std::net::{TcpListener, TcpStream};
 use std::net::SocketAddr;
+use std::sync::mpsc::Sender;
 
 static NODE_SIZE: OnceCell<usize> = OnceCell::new();
 static LAST_ACTIVE_TXD: AtomicUsize = AtomicUsize::new(100);
@@ -1919,22 +1920,21 @@ fn main() -> io::Result<()> {
         let cloned_transaction = Arc::clone(&current_transaction);
         let cloned_txd_count = Arc::clone(&txd_count);
         let cloned_all_addr = Arc::clone(&all_address);
+        let tx_clone = tx.clone();
         match stream {
             Ok(stream) => {
-                thread::spawn(move || handle_stream(stream, wal_file_path, cloned_txd_count, cloned_transaction, cloned_file, cloned_node, cloned_all_addr));
+                thread::spawn(move || handle_stream(stream, wal_file_path, cloned_txd_count, cloned_transaction, cloned_file, cloned_node, cloned_all_addr, tx_clone));
             }
             Err(e) => println!("Error: {}", e),
         }
-
-        if CHECKPOINT_COUNTER.load(Ordering::Relaxed) == 100 {
-            tx.send(1).unwrap();
-        }
     }
 
+    drop(tx);
     t1.join().unwrap();
 
     Ok(())
 }
+
 
 fn checkpoint(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str, file: Arc<RwLock<File>>, all_addr: Arc<RwLock<Vec<SocketAddr>>>, transaction: Arc<RwLock<Transaction>> ) {
     match Node::get_oldest_active_txd(transaction, all_addr) {
@@ -2219,6 +2219,7 @@ fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<
                         return Ok(1);
                     }
 
+                    println!("HELLO");
                     return Ok(3);
                 }
 
@@ -2416,7 +2417,7 @@ fn initial_wal_invoke(wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_
 
 }
 
-fn handle_stream(mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, all_addr: Arc<RwLock<Vec<SocketAddr>>>) -> io::Result<()> {
+fn handle_stream(mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, all_addr: Arc<RwLock<Vec<SocketAddr>>>, tx: Sender<i32>) -> io::Result<()> {
     // In session project.
     // println!("Enter 'Help' for available commands & 'exit' to quit.");
 
@@ -2444,17 +2445,21 @@ fn handle_stream(mut stream: TcpStream, wal_file_path: &str, txd_count: Arc<RwLo
                     Ok(1) => continue,
                     Ok(2) => break,
                     Ok(3) => {
+                        println!(":HI");
                         CHECKPOINT_COUNTER.store(100, Ordering::Relaxed);
                     }
                     Ok(_) => {}
                     Err(e) => println!("Error: {}", e),
                 }
-                println!("A");
 
                 let metadata = fs::metadata(wal_file_path)?;
                 let size = metadata.len();
 
-                if CHECKPOINT_COUNTER.load(Ordering::Relaxed) >= 100 && size >= 1024 {
+                if CHECKPOINT_COUNTER.load(Ordering::Relaxed) >= 100 || size >= 1024 {
+                    println!("ZZZZ");
+                    tx.send(1).unwrap();
+
+                    return Ok(());
                     println!("Maximum WAL file size exceeded.");
                     CHECKPOINT_COUNTER.store(0, Ordering::Relaxed);
                 }
