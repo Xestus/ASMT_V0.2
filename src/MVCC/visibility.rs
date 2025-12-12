@@ -6,7 +6,7 @@ use crate::transactions::transactions::*;
 pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u32, status: Arc<RwLock<Transaction>>) -> Option<String> {
     // HAck: Looks inefficient, redo it later
     let mut result = Vec::new();
-    match fetch_versions_for_key(node, k) {
+    match fetch_versions_for_key(node, k, false) {
         Some(version) => {
             result = version;
         }
@@ -115,7 +115,7 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
 /// # TODO + WARNING:
 /// - THE SYSTEM CURRENTLY ISN'T CONCURRENT BUT IS CONCURRENCY IS THE NEXT FEATURE TO BE ADDED AFTER WRITE AHEAD LOGIN. PLEASE FORGIVE ME.
 /// - CASES WITH READER/WRITER COLLISION WILL BE HANDLED WITH REPLACEMENT OF MUTEX WITH RWLOCK, DEPENDING UPON NEED.
-pub fn fetch_versions_for_key(node: Arc<RwLock<Node>>, key: u32) -> Option<Vec<Version>> {
+pub fn fetch_versions_for_key(node: Arc<RwLock<Node>>, key: u32, remove_version : bool) -> Option<Vec<Version>> {
     let mut stack = Vec::new();
     stack.push(node);
 
@@ -124,7 +124,13 @@ pub fn fetch_versions_for_key(node: Arc<RwLock<Node>>, key: u32) -> Option<Vec<V
 
         for i in 0..current.input.len() {
             if current.input[i].key == key {
-                return Some(current.input[i].version.clone());
+                if !remove_version {
+                    return Some(current.input[i].version.clone());
+                } else {
+                    drop (current);
+                    remove_aborted_update(self_node, i);
+                    return None;
+                }
             }
         }
 
@@ -145,4 +151,18 @@ pub fn fetch_versions_for_key(node: Arc<RwLock<Node>>, key: u32) -> Option<Vec<V
     None
 }
 
-
+fn remove_aborted_update(node: Arc<RwLock<Node>>, i: usize) {
+    let (new_xmax, length) = {
+        let y = &node.read().unwrap().input[i].version;
+        (y.last().unwrap().xmin, y.len())
+    };
+    let node_write = &mut node.write().unwrap().input[i].version;
+    {
+        node_write.remove(length - 1);
+    }
+    {
+        if length > 1 {
+            node_write[length - 1].xmax = Some(new_xmax);
+        }
+    }
+}
