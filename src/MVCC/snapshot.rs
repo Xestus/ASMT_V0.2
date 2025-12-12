@@ -2,8 +2,12 @@ use std::sync::{Arc, RwLock};
 use std::sync::atomic::Ordering;
 use crate::btree::node::Node;
 use crate::LAST_ACTIVE_TXD;
-pub fn fetch_serializable_btree(node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
-    let xmax_threshold = LAST_ACTIVE_TXD.load(Ordering::SeqCst) as u32;
+pub fn snapshot(node: Arc<RwLock<Node>>, required_xmax: Option<u32>) -> Arc<RwLock<Node>> {
+    let xmax_threshold = if let Some(xmax) = required_xmax {
+        xmax
+    } else {
+        LAST_ACTIVE_TXD.load(Ordering::SeqCst) as u32
+    };
 
     {
         let mut node_guard = node.write().unwrap();
@@ -41,7 +45,7 @@ pub fn fetch_serializable_btree(node: Arc<RwLock<Node>>) -> Arc<RwLock<Node>> {
 
     for child_arc in &node_guard.children {
         let clone = Arc::clone(child_arc);
-        fetch_serializable_btree(clone);
+        snapshot(clone, Some(xmax_threshold));
     }
 
     drop(node_guard);

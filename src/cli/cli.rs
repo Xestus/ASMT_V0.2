@@ -319,11 +319,17 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                         return Ok(1);
                     }
 
-                    let message = format!("{:?}", new_node.read().unwrap());
-                    let message_2 = format!("{:?}", new_node.read().unwrap().print_tree());
-                    println!("{:?}", new_node.read().unwrap().print_tree());
-                    log_message(message.as_str());
-                    log_message(message_2.as_str());
+                    {
+                        let tx = current_transaction.read().unwrap();
+
+                        match tx.ip_txd.get(&addr) {
+                            Some(&x) => {
+                                let tree_node = snapshot(new_node, Some(x));
+                                println!("{:?}", tree_node.read().unwrap().print_tree());
+                            }
+                            None => {}
+                        }
+                    }
                 }
 
                 "stats" => {
@@ -332,8 +338,17 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                         return Ok(1);
                     }
 
-                    let message = format!("{:?}", new_node.read().unwrap().print_stats());
-                    log_message(message.as_str());
+                    {
+                        let tx = current_transaction.read().unwrap();
+
+                        match tx.ip_txd.get(&addr) {
+                            Some(&x) => {
+                                let tree_node = snapshot(new_node, Some(x));
+                                println!("{:?}", tree_node.read().unwrap().print_stats());
+                            }
+                            None => {}
+                        }
+                    }
                 }
 
                 "help" => {
