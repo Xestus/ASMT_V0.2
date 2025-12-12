@@ -5,27 +5,27 @@ use std::sync::atomic::Ordering;
 use crate::btree::node::Node;
 use crate::CHECKPOINT_COUNTER;
 use crate::MVCC::gc::remove_dead_version;
-use crate::MVCC::snapshot::fetch_serializable_btree;
+use crate::MVCC::snapshot::snapshot;
 use crate::storage::io::empty_file;
 use crate::storage::ser::serialize;
 use crate::storage::wal::reader::get_uncommitted_transactions;
 use crate::storage::wal::writer::flush_to_wal;
-use crate::transactions::manager::get_oldest_active_txd;
+use crate::transactions::manager::get_all_active_transaction;
 use crate::transactions::transactions::Transaction;
 
 pub fn checkpoint(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_path: &str, file: Arc<RwLock<File>>, all_addr: Arc<RwLock<Vec<SocketAddr>>>, transaction: Arc<RwLock<Transaction>> ) {
-    match get_oldest_active_txd(transaction, all_addr) {
-        Some(x) => {
-            remove_dead_version(Arc::clone(&node), x);
-        }
-        None => {
-            println!("The given transaction has no active transaction. That's odd. HMM");
-        }
+    let all_active_txd =  get_all_active_transaction(transaction, all_addr);
+    
+    if all_active_txd.len() == 0 { 
+        println!("The given transaction has no active transaction. That's odd. HMM");
+    } else {
+        let x = all_active_txd.first().unwrap();
+        remove_dead_version(Arc::clone(&node), *x);
     }
-
+    
     let mut cloned_node = node.clone();
 
-    cloned_node = fetch_serializable_btree(cloned_node);
+    cloned_node = snapshot(cloned_node, None);
 
     match serialize(Arc::clone(&cloned_node),serialized_file_path) {
         Ok(_) => {}

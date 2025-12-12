@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use crate::transactions::transactions::{Transaction, TransactionStatus};
 
-pub fn get_oldest_active_txd(current_transactions: Arc<RwLock<Transaction>>, all_addr: Arc<RwLock<Vec<SocketAddr>>>) -> Option<u32> {
+pub fn get_all_active_transaction(current_transactions: Arc<RwLock<Transaction>>, all_addr: Arc<RwLock<Vec<SocketAddr>>>) -> Vec<u32> {
     let mut all_txd = Vec::new();
 
     {
@@ -22,7 +22,6 @@ pub fn get_oldest_active_txd(current_transactions: Arc<RwLock<Transaction>>, all
     }
 
     all_txd.sort();
-
-    all_txd.first().copied()
-
+    
+    all_txd
 }
