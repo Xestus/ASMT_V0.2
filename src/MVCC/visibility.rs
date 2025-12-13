@@ -166,3 +166,21 @@ fn remove_aborted_update(node: Arc<RwLock<Node>>, i: usize) {
         }
     }
 }
+
+pub fn modified_key_check(active_txd: Vec<u32>, new_key: u32, txd_of_key: u32, transaction: Arc<RwLock<Transaction>>) -> bool {
+    for i in active_txd {
+        if txd_of_key == i { continue; }
+
+        match transaction.read().unwrap().items.get(&i){
+            Some(item) => {
+                let x = &item.modified_keys;
+
+                for j in x.iter() {
+                    if *j == new_key { return true; }
+                }
+            }
+            None => {  }
+        }
+    }
+    false
+}

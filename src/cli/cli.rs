@@ -9,8 +9,9 @@ use crate::CHECKPOINT_COUNTER;
 use crate::cli::parser::parse_string;
 use crate::MVCC::snapshot::snapshot;
 use crate::transactions::transactions::{Transaction, TransactionItems, TransactionStatus};
+use crate::transactions::manager::get_all_active_transaction;
 use crate::storage::wal::writer::flush_to_wal;
-use crate::MVCC::visibility::{select_key, fetch_versions_for_key};
+use crate::MVCC::visibility::{select_key, fetch_versions_for_key, modified_key_check};
 
 pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, stream: Option<&TcpStream>, all_addr: Arc<RwLock<Vec<SocketAddr>>> ) -> io::Result<u8> {
     println!("{:?}", cli_input);
@@ -26,13 +27,14 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
             println!("{}", message);
         }
     };
-      
+
     match parse_string(cli_input) {
         Ok((addr, args_string)) => {
             let args: Vec<&str> = args_string.iter().map(|s| s.as_str()).collect();
 
             let mut all_addr_write = all_addr.write().unwrap();
             all_addr_write.push(addr);
+            drop(all_addr_write);
 
             if args.is_empty() { return Ok(1); }
             match args[0].to_lowercase().as_str() {
@@ -157,7 +159,15 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
 
                     let key = args[1].parse::<u32>().expect("Invalid argument");
                     let value = args[2].parse::<String>().expect("Invalid argument");
-                    {
+
+                    let active_txd_vec = get_all_active_transaction(Arc::clone(&current_transaction), all_addr);
+
+                    let txd = current_transaction.read().unwrap().ip_txd.get(&addr).unwrap().clone();
+                    let y = modified_key_check(active_txd_vec, key, txd, Arc::clone(&current_transaction) );
+
+                    if y {
+                        println!("The key you're trying to insert has already been updated by another client.")
+                    } else {
                         let mut tx = current_transaction.write().unwrap();
 
                         match tx.ip_txd.get(&addr) {
@@ -172,9 +182,8 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                                 return Ok(1);
                             }
                         }
+                        CHECKPOINT_COUNTER.fetch_add(1, Ordering::SeqCst);
                     }
-
-                    CHECKPOINT_COUNTER.fetch_add(1, Ordering::SeqCst);
                 }
 
                 "update" => {
@@ -186,7 +195,14 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                     let key = args[1].parse::<u32>().expect("Invalid argument");
                     let value = args[2].parse::<String>().expect("Invalid argument");
 
-                    {
+                    let active_txd_vec = get_all_active_transaction(Arc::clone(&current_transaction), all_addr);
+
+                    let txd = current_transaction.read().unwrap().ip_txd.get(&addr).unwrap().clone();
+                    let y = modified_key_check(active_txd_vec, key, txd, Arc::clone(&current_transaction) );
+
+                    if y {
+                        println!("The key you're trying to update has already been updated by another client.")
+                    } else {
                         let mut tx = current_transaction.write().unwrap();
 
                         match tx.ip_txd.get(&addr) {
@@ -205,7 +221,6 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                                 return Ok(1);
                             }
                         }
-
                     }
                 }
 
