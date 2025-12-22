@@ -54,13 +54,14 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
-                                tx.ip_txd.insert(addr, *mut_txd_count);
                                 let item = tx.items.get(&x);
                                 if let Some(item) = item {
                                     if item.status == TransactionStatus::Committed || item.status == TransactionStatus::Aborted {
+                                        tx.ip_txd.insert(addr, *mut_txd_count);
                                         tx.items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, socket_addr: addr, last_txd: x, modified_keys: Vec::new() });
                                         tx.items.remove(&x);
                                     } else {
+                                        *mut_txd_count -= 1;
                                         log_message("Previous transaction is still active. Close it to start a new one.");
                                     }
                                 }
@@ -274,10 +275,10 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
-                                let last_txd = tx.items.get(&x).unwrap().last_txd;
+                                // let last_txd = tx.items.get(&x).unwrap().last_txd;
 
                                 let messages ;
-                                match select_key(Arc::clone(&new_node), key, last_txd, x, Arc::clone(&current_transaction)) {
+                                match select_key(Arc::clone(&new_node), key, *txd_count.read().unwrap(), x, Arc::clone(&current_transaction)) {
                                     Some(value) => {
                                         messages = format!("Value: {:?}", value)
                                     },
@@ -328,6 +329,8 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                     log_message(messages.as_str());
                 }
 
+
+                // TODO: FIX TREE DISPLAY
                 "tree" => {
                     if args.len() != 2 {
                         log_message("Invalid argument");
@@ -336,10 +339,11 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
 
                     {
                         let tx = current_transaction.read().unwrap();
+                        let duplicate_node = new_node.clone();
 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
-                                let tree_node = snapshot(new_node, Some(x));
+                                let tree_node = snapshot(duplicate_node, Some(x));
                                 println!("{:?}", tree_node.read().unwrap().print_tree());
                             }
                             None => {}
@@ -355,10 +359,11 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
 
                     {
                         let tx = current_transaction.read().unwrap();
+                        let duplicate_node = new_node.clone();
 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
-                                let tree_node = snapshot(new_node, Some(x));
+                                let tree_node = snapshot(duplicate_node, Some(x));
                                 println!("{:?}", tree_node.read().unwrap().print_stats());
                             }
                             None => {}

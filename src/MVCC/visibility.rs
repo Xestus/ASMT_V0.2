@@ -21,8 +21,6 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
     for i in 0..result.iter().len() {
         let result_max = result[i].xmax;
         let result_min = result[i].xmin;
-        let min_status = status_read_guard.items.get(&result[i].xmin);
-        // let min_status = status_read_guard.status.get(&result[i].xmin);
 
         let (mut visible_xmax, mut visible_xmin) = (false, false);
 
@@ -52,16 +50,9 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
             }
         }
 
-        if (result_min == last_txd) {
+        if (result_min <= last_txd) {
             visible_xmin = true;
             // visible -- min == current_txd_id
-        } else if let Some(min_temp_status) = min_status {
-            if let TransactionStatus::Committed = min_temp_status.status
-                && result_min < last_txd
-            {
-                visible_xmin = true;
-                // visible
-            }
         }
 
         if visible_xmax && visible_xmin {
