@@ -37,6 +37,10 @@ impl Node {
                 let ver_count = write_guard.input[i].version.len();
                 write_guard.input[i].version[ver_count - 1].xmax = Option::from(txn);
 
+                if ver_count >= 2 {
+                    write_guard.input[i].version[ver_count - 2].xmax = None;
+                }
+
                 if let Some(value) = v {
                     let ver = Version {
                         value,

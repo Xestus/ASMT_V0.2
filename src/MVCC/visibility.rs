@@ -8,6 +8,7 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
     let mut result = Vec::new();
     match fetch_versions_for_key(node, k, false) {
         Some(version) => {
+            println!("{:#?} \n  {:?}", version, last_txd);
             result = version;
         }
         None => {}
@@ -21,6 +22,14 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
     for i in 0..result.iter().len() {
         let result_max = result[i].xmax;
         let result_min = result[i].xmin;
+
+        if let Some(result_xmax_now) = result_max {
+            if result_min == result_xmax_now {
+                continue;
+            }
+        }
+
+        let min_status = status_read_guard.items.get(&result[i].xmin);
 
         let (mut visible_xmax, mut visible_xmin) = (false, false);
 
@@ -40,6 +49,7 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
                     }
                 }
             }
+
             None => {
                 visible_xmax = true;
                 // visible -- xmax == None
@@ -50,10 +60,25 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
             }
         }
 
-        if (result_min <= last_txd) {
+        if (result_min == current_txd) {
             visible_xmin = true;
             // visible -- min == current_txd_id
+        } else if result_min < current_txd {
+
+            match min_status {
+                Some(min_temp_status) => {
+                    if matches!(min_temp_status.status, TransactionStatus::Committed) {
+                        visible_xmin = true;
+                    }
+                }
+                None => {
+                    println!("SHOULD BE HERE");
+                    visible_xmin = true;
+                }
+            }
         }
+
+        println!("Visible XMAX: {:?} ... Visible XMIN: {:?}", visible_xmax, visible_xmin);
 
         if visible_xmax && visible_xmin {
             selected_keys.push(result[i].value.clone());
