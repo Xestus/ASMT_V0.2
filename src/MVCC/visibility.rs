@@ -60,7 +60,7 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
             }
         }
 
-        if (result_min == current_txd) {
+        if result_min == current_txd {
             visible_xmin = true;
             // visible -- min == current_txd_id
         } else if result_min < current_txd {
@@ -140,12 +140,12 @@ pub fn fetch_versions_for_key(node: Arc<RwLock<Node>>, key: u32, remove_version 
 
         for i in 0..current.input.len() {
             if current.input[i].key == key {
-                if !remove_version {
-                    return Some(current.input[i].version.clone());
+                return if !remove_version {
+                    Some(current.input[i].version.clone())
                 } else {
-                    drop (current);
+                    drop(current);
                     remove_aborted_update(self_node, i);
-                    return None;
+                    None
                 }
             }
         }
@@ -168,16 +168,17 @@ pub fn fetch_versions_for_key(node: Arc<RwLock<Node>>, key: u32, remove_version 
 }
 
 fn remove_aborted_update(node: Arc<RwLock<Node>>, i: usize) {
-    let (new_xmax, length) = {
+    let (new_xmax, mut length) = {
         let y = &node.read().unwrap().input[i].version;
         (y.last().unwrap().xmin, y.len())
     };
     let node_write = &mut node.write().unwrap().input[i].version;
     {
         node_write.remove(length - 1);
+        length -= 1;
     }
     {
-        if length > 1 {
+        if length > 0 {
             node_write[length - 1].xmax = Some(new_xmax);
         }
     }

@@ -1,13 +1,14 @@
 use std::io;
 use std::sync::{Arc, RwLock};
 use crate::btree::node::{Items, Node};
+use crate::MVCC::versions::KeyStatus::Active;
 use crate::MVCC::versions::Version;
 
 impl Node {
-    pub fn insert(mut self_node: Arc<RwLock<Node>>, k: u32, v: String, txn: u32) -> io::Result<()> {
+    pub fn insert(self_node: Arc<RwLock<Node>>, k: u32, v: String, txn: u32) -> io::Result<()> {
         {
-            let ver = Version { value: v.clone(), xmin: txn, xmax: None, };
-            match Node::find_and_update_key_version(Arc::clone(&self_node), k, Some(v), txn) {
+            let ver = Version { value: v.clone(), xmin: txn, xmax: None, key_status: Active };
+            match Node::find_and_update_key_version(Arc::clone(&self_node), k, Some(v), txn, false) {
                 Some(_) => {
                     println!("Key already exists");
                     return Ok(());
@@ -27,7 +28,7 @@ impl Node {
     /// # THIS IS A TEMPORARY HACK SOLUTION. IT'LL STAY THERE TILL I ADD AN ACTUAL THREAD SAFE FUNCTION.
     /// ## DO NOT TAKE THIS SERIOUSLY.
     /// ### :(
-    pub fn find_and_update_key_version(node: Arc<RwLock<Node>>, key: u32, v: Option<String>, txn: u32, ) -> Option<()> {
+    pub fn find_and_update_key_version(node: Arc<RwLock<Node>>, key: u32, v: Option<String>, txn: u32, delete: bool) -> Option<()> {
         let mut write_guard = {
             let w1 = node.write();
             w1.unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -35,7 +36,17 @@ impl Node {
         for i in 0..write_guard.input.len() {
             if write_guard.input[i].key == key {
                 let ver_count = write_guard.input[i].version.len();
-                write_guard.input[i].version[ver_count - 1].xmax = Option::from(txn);
+
+                if delete {
+                    let last_xmin = {
+                        let x = &write_guard.input[i].version;
+                        x[ver_count - 1].xmin
+                    };
+
+                    write_guard.input[i].version[ver_count - 1].xmax = Option::from(last_xmin);
+                } else {
+                    write_guard.input[i].version[ver_count - 1].xmax = Option::from(txn);
+                }
 
                 if ver_count >= 2 {
                     write_guard.input[i].version[ver_count - 2].xmax = None;
@@ -46,6 +57,7 @@ impl Node {
                         value,
                         xmin: txn,
                         xmax: None,
+                        key_status: Active,
                     };
                     write_guard.input[i].version.push(ver);
                 }
@@ -58,17 +70,17 @@ impl Node {
             if key < read_guard.input[0].key {
                 let guard = Arc::clone(&read_guard.children[0]);
                 drop(read_guard);
-                return Node::find_and_update_key_version(guard, key, v, txn);
+                return Node::find_and_update_key_version(guard, key, v, txn, delete);
             } else if key > read_guard.input[read_guard.input.len() - 1].key {
                 let guard = Arc::clone(&read_guard.children.last().unwrap());
                 drop(read_guard);
-                return Node::find_and_update_key_version(guard, key, v, txn);
+                return Node::find_and_update_key_version(guard, key, v, txn, delete);
             } else {
                 for i in 0..read_guard.input.len() - 1 {
                     if key > read_guard.input[i].key && key < read_guard.input[i + 1].key {
                         let guard = Arc::clone(&read_guard.children[i + 1]);
                         drop(read_guard);
-                        return Node::find_and_update_key_version(guard, key, v, txn);
+                        return Node::find_and_update_key_version(guard, key, v, txn, delete);
                     }
                 }
             }
