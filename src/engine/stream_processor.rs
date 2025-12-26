@@ -32,8 +32,6 @@ pub fn process_tcp_stream(mut stream: TcpStream, wal_file_path: &str, txd_count:
                 let addr = stream.peer_addr()?;
                 let command = format!("{} {}", command, addr);
 
-                println!("Client {}", command);
-
                 match cli(command, Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), Some(&stream), Arc::clone(&all_addr)) {
                     Ok(1) => continue,
                     Ok(2) => break,
@@ -49,12 +47,11 @@ pub fn process_tcp_stream(mut stream: TcpStream, wal_file_path: &str, txd_count:
                 let size = metadata.len();
 
                 if CHECKPOINT_COUNTER.load(Ordering::Relaxed) >= 100 || size >= 1024 {
-                    println!("ZZZZ");
                     tx.send(1).unwrap();
-
-                    return Ok(());
                     println!("Maximum WAL file size exceeded.");
                     CHECKPOINT_COUNTER.store(0, Ordering::Relaxed);
+
+                    return Ok(());
                 }
 
                 stream.write_all(b"\n")?;
@@ -66,38 +63,5 @@ pub fn process_tcp_stream(mut stream: TcpStream, wal_file_path: &str, txd_count:
             }
         }
     }
-
-
-    /*    loop {
-            // In session project.
-            // print!(">  ");
-            io::stdout().flush()?;
-
-            let mut cli_input = String::new();
-
-
-            match io::stdin().read_line(&mut cli_input) {
-                Ok(_) => {
-                    match cli(cli_input, Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node)) {
-                        Ok(1) => continue,
-                        Ok(2) => break,
-                        Ok(3) => {
-                            CHECKPOINT_COUNTER.store(100, Ordering::Relaxed);
-                        }
-                        Ok(_) => {}
-                        Err(e) => println!("Error: {}", e),
-                    }
-                    let metadata = fs::metadata(wal_file_path)?;
-                    let size = metadata.len();
-
-                    if CHECKPOINT_COUNTER.load(Ordering::Relaxed) >= 100 && size >= 1024 {
-                        println!("Maximum WAL file size exceeded.");
-                        CHECKPOINT_COUNTER.store(0, Ordering::Relaxed);
-                    }
-                }
-                Err(e) => println!("Invalid argument. Error: {:?}", e),
-            }
-        }
-    */
     Ok(())
 }

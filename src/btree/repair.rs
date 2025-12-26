@@ -152,7 +152,7 @@ impl Node {
         drop(child_write);
 
         let mut self_write = self_node.write().unwrap();
-        let mut child_read = child.read().unwrap();
+        let child_read = child.read().unwrap();
 
         let child_len = child_read.children.len();
 

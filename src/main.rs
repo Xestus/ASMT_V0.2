@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
+use std::fs::{ OpenOptions};
 use std::sync::{mpsc, Arc, RwLock };
 use std::{io, thread};
 use std::net::{TcpListener};
@@ -38,7 +38,7 @@ fn main() -> io::Result<()> {
 
     let txd_count = Arc::new(RwLock::new(0));
 
-    if !is_file_empty(wal_file_path) { initialize_from_wal(wal_file_path, Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), Arc::clone(&all_address)); }
+    // if !is_file_empty(wal_file_path) { initialize_from_wal(wal_file_path, Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), Arc::clone(&all_address)); }
 
     let (tx, rx) = mpsc::channel();
     let t1 = thread::spawn(move || {
@@ -47,9 +47,8 @@ fn main() -> io::Result<()> {
         }
     });
 
-    let listener = TcpListener::bind("127.0.0.1:8081")?;
+    let listener: TcpListener = TcpListener::bind("127.0.0.1:8080")?;
     println!("Server listening on port 8080");
-
     for stream in listener.incoming() {
         let cloned_node = Arc::clone(&new_node);
         let cloned_file = Arc::clone(&file);

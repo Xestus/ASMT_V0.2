@@ -11,7 +11,7 @@ pub mod reconstruct;
 use crate::storage::io::is_file_empty;
 
 impl Node {
-    pub fn deserialize(serialized_file_path: &str) -> io::Result<(Arc<RwLock<Node>>)> {
+    pub fn deserialize(serialized_file_path: &str) -> io::Result<Arc<RwLock<Node>>> {
         if is_file_empty(serialized_file_path) {
             return Ok(Node::new());
         }

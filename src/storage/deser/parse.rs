@@ -2,8 +2,8 @@
 
 // fn get_hierarchical_node(root, &mut vec) -> HierarchicalNode
 
-use crate::btree::node::{Items, Node};
-use crate::MVCC::versions::Version;
+use crate::btree::node::{Items};
+use crate::MVCC::versions::{Version, VersionStatus};
 use crate::storage::deser::num_or_str::*;
 use crate::storage::deser::tree_nodes::{HierarchicalNode, KeyVersionNode};
 
@@ -93,7 +93,7 @@ pub fn get_key_version_node(vec: Vec<I32OrString>) -> Vec<KeyVersionNode> {
         if dec_count_for_versions == 0 {
             let mut ver_vec: Vec<Version> = Vec::new();
             for j in 0..xmin_vec.len() {
-                ver_vec.push(Version { value: values_vec[j].clone(), xmin: xmin_vec[j] as u32, xmax: Some(xmax_vec[j] as u32) });
+                ver_vec.push(Version { value: values_vec[j].clone(), xmin: xmin_vec[j] as u32, xmax: Some(xmax_vec[j] as u32), version_status: VersionStatus::Active });
             }
             values_vec.clear();
             xmin_vec.clear();

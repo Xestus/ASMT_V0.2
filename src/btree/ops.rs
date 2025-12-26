@@ -1,13 +1,12 @@
 use std::io;
 use std::sync::{Arc, RwLock};
 use crate::btree::node::{Items, Node};
-use crate::MVCC::versions::KeyStatus::Active;
-use crate::MVCC::versions::Version;
+use crate::MVCC::versions::{Version, VersionStatus};
 
 impl Node {
     pub fn insert(self_node: Arc<RwLock<Node>>, k: u32, v: String, txn: u32) -> io::Result<()> {
         {
-            let ver = Version { value: v.clone(), xmin: txn, xmax: None, key_status: Active };
+            let ver = Version { value: v.clone(), xmin: txn, xmax: None, version_status: VersionStatus::Active };
             match Node::find_and_update_key_version(Arc::clone(&self_node), k, Some(v), txn, false) {
                 Some(_) => {
                     println!("Key already exists");
@@ -15,7 +14,7 @@ impl Node {
                 }
                 None => {
                     let version = vec![ver.clone()];
-                    Node::add_new_keys(Arc::clone(&self_node), Items { key: k, rank: 1, version, }, );
+                    Node::add_new_keys(Arc::clone(&self_node), Items { key: k, rank: 1, version }, );
                 }
             }
         }
@@ -57,7 +56,7 @@ impl Node {
                         value,
                         xmin: txn,
                         xmax: None,
-                        key_status: Active,
+                        version_status: VersionStatus::Active,
                     };
                     write_guard.input[i].version.push(ver);
                 }

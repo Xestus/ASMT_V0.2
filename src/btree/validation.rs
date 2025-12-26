@@ -24,6 +24,6 @@ impl Node {
         node = Node::min_size_check(node);
         node = Node::child_overflow(node);
         node = Node::rank_correction(node);
-        node = Node::sort_everything(node);
+        Node::sort_everything(node);
     }
 }
