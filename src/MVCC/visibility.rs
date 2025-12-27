@@ -8,7 +8,6 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
     let mut result = Vec::new();
     match fetch_items_for_key(node, k) {
         Some(items) => {
-            println!("{:#?} \n  {:?}", items, last_txd);
             result = items.version;
         }
         None => {}
@@ -22,6 +21,10 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
     for i in 0..result.iter().len() {
         let result_max = result[i].xmax;
         let result_min = result[i].xmin;
+
+        if result[i].version_status == VersionStatus::Delete || result[i].version_status == VersionStatus::Abort {
+            continue;
+        }
 
         if let Some(result_xmax_now) = result_max {
             if result_min == result_xmax_now {
@@ -60,11 +63,12 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
             }
         }
 
-        if result_min == current_txd {
+        if status_read_guard.items.get(&current_txd)?.visible_max < result_min {
+            visible_xmin = false;
+        } else if result_min == current_txd {
             visible_xmin = true;
             // visible -- min == current_txd_id
         } else if result_min < current_txd {
-
             match min_status {
                 Some(min_temp_status) => {
                     if matches!(min_temp_status.status, TransactionStatus::Committed) {

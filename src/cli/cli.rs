@@ -58,7 +58,7 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                                 if let Some(item) = item {
                                     if item.status == TransactionStatus::Committed || item.status == TransactionStatus::Aborted {
                                         tx.ip_txd.insert(addr, *mut_txd_count);
-                                        tx.items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, socket_addr: addr, last_txd: x, modified_keys: Vec::new() });
+                                        tx.items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, last_txd: x, modified_keys: Vec::new(), visible_max: *mut_txd_count });
                                         tx.items.remove(&x);
                                     } else {
                                         *mut_txd_count -= 1;
@@ -68,7 +68,7 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                             }
                             None => {
                                 tx.ip_txd.insert(addr, *mut_txd_count);
-                                tx.items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, socket_addr: addr, last_txd: 0, modified_keys: Vec::new() });
+                                tx.items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, last_txd: 0, modified_keys: Vec::new(), visible_max: *mut_txd_count });
 
                             }
                         }
@@ -385,17 +385,17 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
 
                     let messages = {
                         "insert <key> <value>  - Insert a key-value pair\n
-                 update <key> <value>  - Update a key-value pair\n
-                 select <key>          - Get the visible value for the key\n
-                 dump <key>            - Get all the values for the key\n
-                 delete <key>          - Delete a key\n
-                 begin                 - Start a cycle\n
-                 commit                - Push a new version of the key\n
-                 abort                 - Abort the current cycle\n
-                 tree                  - Show B-Tree in ASCII art form\n
-                 stats                 - Show B-Tree Stats\n
-                 help                  - List out all the commands\n
-                 exit                  - Exit the program"
+                         update <key> <value>  - Update a key-value pair\n
+                         select <key>          - Get the visible value for the key\n
+                         dump <key>            - Get all the values for the key\n
+                         delete <key>          - Delete a key\n
+                         begin                 - Start a cycle\n
+                         commit                - Push a new version of the key\n
+                         abort                 - Abort the current cycle\n
+                         tree                  - Show B-Tree in ASCII art form\n
+                         stats                 - Show B-Tree Stats\n
+                         help                  - List out all the commands\n
+                         exit                  - Exit the program"
                     };
 
                     log_message(messages);
