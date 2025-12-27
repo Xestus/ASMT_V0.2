@@ -1,15 +1,15 @@
-use std::sync::{Arc, RwLock};
-use crate::btree::node::Node;
-use crate::MVCC::versions::Version;
+use std::sync::{Arc, RwLock, RwLockReadGuard};
+use crate::btree::node::{Items, Node};
+use crate::MVCC::versions::{Version, VersionStatus};
 use crate::transactions::transactions::*;
 
 pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u32, status: Arc<RwLock<Transaction>>) -> Option<String> {
     // HAck: Looks inefficient, redo it later
     let mut result = Vec::new();
-    match fetch_versions_for_key(node, k, false) {
-        Some(version) => {
-            println!("{:#?} \n  {:?}", version, last_txd);
-            result = version;
+    match fetch_items_for_key(node, k) {
+        Some(items) => {
+            println!("{:#?} \n  {:?}", items, last_txd);
+            result = items.version;
         }
         None => {}
     }
@@ -131,7 +131,7 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
 /// # TODO + WARNING:
 /// - THE SYSTEM CURRENTLY ISN'T CONCURRENT BUT IS CONCURRENCY IS THE NEXT FEATURE TO BE ADDED AFTER WRITE AHEAD LOGIN. PLEASE FORGIVE ME.
 /// - CASES WITH READER/WRITER COLLISION WILL BE HANDLED WITH REPLACEMENT OF MUTEX WITH RWLOCK, DEPENDING UPON NEED.
-pub fn fetch_versions_for_key(node: Arc<RwLock<Node>>, key: u32, remove_version : bool) -> Option<Vec<Version>> {
+fn fetch_items_for_key(node: Arc<RwLock<Node>>, key: u32) -> Option<Items> {
     let mut stack = Vec::new();
     stack.push(node);
 
@@ -140,39 +140,126 @@ pub fn fetch_versions_for_key(node: Arc<RwLock<Node>>, key: u32, remove_version 
 
         for i in 0..current.input.len() {
             if current.input[i].key == key {
-                return if !remove_version {
-                    Some(current.input[i].version.clone())
-                } else {
-                    drop(current);
-                    remove_aborted_update(self_node, i);
-                    None
-                }
+                return Some(current.input[i].clone())
             }
         }
 
-        if !current.children.is_empty() {
-            if key < current.input[0].key {
-                stack.push(Arc::clone(&current.children[0]));
-            } else if key > current.input[current.input.len() - 1].key {
-                stack.push(Arc::clone(&current.children[current.children.len() - 1]));
-            } else {
-                for i in 0..current.input.len() - 1 {
-                    if key > current.input[i].key && key < current.input[i + 1].key {
-                        stack.push(Arc::clone(&current.children[i + 1]));
-                    }
-                }
-            }
-        }
+        push_to_stack(key, &mut stack, current);
     }
     None
 }
 
-fn remove_aborted_update(node: Arc<RwLock<Node>>, i: usize) {
-    let (new_xmax, mut length) = {
-        let y = &node.read().unwrap().input[i].version;
+pub fn fetch_version_vec_for_key(node: Arc<RwLock<Node>>, key:u32) -> Option<Vec<Version>> {
+     match fetch_items_for_key(node, key) {
+         Some(items) => {
+             Some(items.version)
+         }
+
+         None => {
+             None
+         }
+     }
+}
+
+fn fetch_nodes_for_key(node: Arc<RwLock<Node>>, key: u32) -> (Option<Arc<RwLock<Node>>>, Option<usize>) {
+    let mut stack = Vec::new();
+    stack.push(node);
+
+    while let Some(self_node) = stack.pop() {
+        let current = self_node.read().unwrap_or_else(|e| e.into_inner());
+
+        for i in 0..current.input.len() {
+            if current.input[i].key == key {
+                drop(current);
+                return (Some(self_node), Some(i));
+            }
+        }
+
+        push_to_stack(key, &mut stack, current);
+    }
+    (None, None)
+}
+
+pub fn commit_abort_handler(node: Arc<RwLock<Node>>, key: u32, commit: bool ) {
+    match fetch_nodes_for_key(node, key) {
+        (Some(node), Some(i)) => {
+            if commit {
+                modify_committed_version(node, i);
+            } else {
+                modify_aborted_version(node, i);
+            }
+        }
+        (None, None) => {
+            println!("No keys were modified in current transaction.");
+        }
+
+        _ => {},
+    }
+}
+
+fn modify_committed_version(node:Arc<RwLock<Node>>, key_position: usize) {
+    let mut modified_version_index = Vec::new();
+
+    {
+        let ver_read_guard = &node.read().unwrap().input[key_position].version;
+        let ver_len = ver_read_guard.len();
+
+        for i in 0..ver_len {
+            if ver_read_guard[i].version_status == VersionStatus::Active {
+                modified_version_index.push(i);
+            }
+        }
+    }
+
+    {
+        let ver_write_guard = &mut node.write().unwrap().input[key_position].version;
+
+        for i in modified_version_index {
+            ver_write_guard[i].version_status = VersionStatus::Commit;
+        }
+    }
+}
+
+// Go through every key again, then go through each version in ascending order, check if any version is Active. If active, abort it.
+// Make previous version's xmax as aborted version's xmax. If there are 2+ aborted versions, when labeling and modifying xmax, ignore the aborted version.
+fn modify_aborted_version(node: Arc<RwLock<Node>>, key_position: usize) {
+
+    let ver_read_guard = &node.read().unwrap().input[key_position].version;
+    let ver_len = ver_read_guard.len();
+    let mut modified_version_index = Vec::new();
+
+    for i in 0..ver_len {
+        if ver_read_guard[i].version_status == VersionStatus::Active {
+            modified_version_index.push(i);
+        }
+    }
+
+    drop(ver_read_guard);
+
+    let ver_write_guard = &mut node.write().unwrap().input[key_position].version;
+
+    {
+        for i in modified_version_index.iter().rev() {
+            ver_write_guard[*i].version_status = VersionStatus::Abort;
+            let xmin_aborted_versions = ver_write_guard[*i].xmin;
+
+            ver_write_guard[*i].xmax = Some(xmin_aborted_versions);
+        }
+    }
+
+    {
+        for i in (0..ver_len).rev() {
+            if ver_write_guard[i].version_status == VersionStatus::Commit {
+                ver_write_guard[i].xmax = None;
+            }
+        }
+    }
+
+/*    let (new_xmax, mut length) = {
+        let y = &node.read().unwrap().input[key_position].version;
         (y.last().unwrap().xmin, y.len())
     };
-    let node_write = &mut node.write().unwrap().input[i].version;
+    let node_write = &mut node.write().unwrap().input[key_position].version;
     {
         node_write.remove(length - 1);
         length -= 1;
@@ -182,11 +269,12 @@ fn remove_aborted_update(node: Arc<RwLock<Node>>, i: usize) {
             node_write[length - 1].xmax = Some(new_xmax);
         }
     }
+*/
 }
 
 pub fn modified_key_check(active_txd: Vec<u32>, new_key: u32, txd_of_key: u32, transaction: Arc<RwLock<Transaction>>) -> bool {
     for i in active_txd {
-        if txd_of_key == i { continue; }
+        if txd_of_key == i { continue; } // Allows updating a key in the same txd of its first modification
 
         match transaction.read().unwrap().items.get(&i){
             Some(item) => {
@@ -200,4 +288,20 @@ pub fn modified_key_check(active_txd: Vec<u32>, new_key: u32, txd_of_key: u32, t
         }
     }
     false
+}
+
+fn push_to_stack(key: u32, stack: &mut Vec<Arc<RwLock<Node>>>, current: RwLockReadGuard<Node>)-> () {
+    if !current.children.is_empty() {
+        if key < current.input[0].key {
+            stack.push(Arc::clone(&current.children[0]));
+        } else if key > current.input[current.input.len() - 1].key {
+            stack.push(Arc::clone(&current.children[current.children.len() - 1]));
+        } else {
+            for i in 0..current.input.len() - 1 {
+                if key > current.input[i].key && key < current.input[i + 1].key {
+                    stack.push(Arc::clone(&current.children[i + 1]));
+                }
+            }
+        }
+    }
 }

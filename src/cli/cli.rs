@@ -11,7 +11,7 @@ use crate::MVCC::snapshot::snapshot;
 use crate::transactions::transactions::{Transaction, TransactionItems, TransactionStatus};
 use crate::transactions::manager::get_all_active_transaction;
 use crate::storage::wal::writer::flush_to_wal;
-use crate::MVCC::visibility::{select_key, fetch_versions_for_key, modified_key_check};
+use crate::MVCC::visibility::{select_key, modified_key_check, fetch_version_vec_for_key, commit_abort_handler};
 
 pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, stream: Option<&TcpStream>, all_addr: Arc<RwLock<Vec<SocketAddr>>> ) -> io::Result<u8> {
     println!("{:?}", cli_input);
@@ -89,10 +89,16 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
                                 let item = &mut tx.items.get(&x);
+                                let mut modified_key_vec = Vec::new();
                                 if let Some(item) = item {
                                     if item.status == TransactionStatus::Active {
                                         if let Some(items) = tx.items.get_mut(&x) {
                                             items.status = TransactionStatus::Committed;
+                                            modified_key_vec = items.modified_keys.clone();
+                                        }
+                                        drop(tx);
+                                        for j in modified_key_vec.iter() {
+                                            commit_abort_handler(Arc::clone(&new_node), *j, true);
                                         }
                                     } else {
                                         println!("Active transaction not found. Commit failed.");
@@ -132,7 +138,7 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                                         }
                                         drop(tx);
                                         for j in modified_key_vec.iter() {
-                                            fetch_versions_for_key(Arc::clone(&new_node), *j, true);
+                                            commit_abort_handler(Arc::clone(&new_node), *j, false);
                                         }
                                         println!("B");
 
@@ -208,7 +214,7 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
-                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), x) {
+                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), x, false) {
                                     Some(_) => flush_to_wal(Arc::clone(&file), args)?,
                                     None => log_message("Key not found"),
                                 }
@@ -238,7 +244,7 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
 
                         match tx.ip_txd.get(&addr) {
                             Some(x) => {
-                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, *x) {
+                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, *x, true) {
                                     Some(_) => {
                                         flush_to_wal(Arc::clone(&file), args.clone())?;
                                     }
@@ -303,7 +309,7 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                     let key = args[1].parse::<u32>().expect("Invalid argument");
 
                     let mut messages= String::new();
-                    match fetch_versions_for_key(Arc::clone(&new_node), key, false) {
+                    match fetch_version_vec_for_key(Arc::clone(&new_node), key) {
                         Some(value) => {
                             let mut message_vector = Vec::new();
 
