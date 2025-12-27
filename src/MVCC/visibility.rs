@@ -220,29 +220,24 @@ fn modify_committed_version(node:Arc<RwLock<Node>>, key_position: usize) {
     }
 }
 
-// Go through every key again, then go through each version in ascending order, check if any version is Active. If active, abort it.
-// Make previous version's xmax as aborted version's xmax. If there are 2+ aborted versions, when labeling and modifying xmax, ignore the aborted version.
 fn modify_aborted_version(node: Arc<RwLock<Node>>, key_position: usize) {
-
-    let ver_read_guard = &node.read().unwrap().input[key_position].version;
-    let ver_len = ver_read_guard.len();
+    let ver_len ;
     let mut modified_version_index = Vec::new();
-
-    for i in 0..ver_len {
-        if ver_read_guard[i].version_status == VersionStatus::Active {
-            modified_version_index.push(i);
+    {
+        let ver_read_guard = &node.read().unwrap().input[key_position].version;
+        ver_len = ver_read_guard.len();
+        for i in 0..ver_len {
+            if ver_read_guard[i].version_status == VersionStatus::Active {
+                modified_version_index.push(i);
+            }
         }
+
     }
-
-    drop(ver_read_guard);
-
     let ver_write_guard = &mut node.write().unwrap().input[key_position].version;
-
     {
         for i in modified_version_index.iter().rev() {
             ver_write_guard[*i].version_status = VersionStatus::Abort;
             let xmin_aborted_versions = ver_write_guard[*i].xmin;
-
             ver_write_guard[*i].xmax = Some(xmin_aborted_versions);
         }
     }
@@ -254,22 +249,6 @@ fn modify_aborted_version(node: Arc<RwLock<Node>>, key_position: usize) {
             }
         }
     }
-
-/*    let (new_xmax, mut length) = {
-        let y = &node.read().unwrap().input[key_position].version;
-        (y.last().unwrap().xmin, y.len())
-    };
-    let node_write = &mut node.write().unwrap().input[key_position].version;
-    {
-        node_write.remove(length - 1);
-        length -= 1;
-    }
-    {
-        if length > 0 {
-            node_write[length - 1].xmax = Some(new_xmax);
-        }
-    }
-*/
 }
 
 pub fn modified_key_check(active_txd: Vec<u32>, new_key: u32, txd_of_key: u32, transaction: Arc<RwLock<Transaction>>) -> bool {
