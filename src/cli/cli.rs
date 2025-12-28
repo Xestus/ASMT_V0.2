@@ -13,7 +13,7 @@ use crate::transactions::manager::get_all_active_transaction;
 use crate::storage::wal::writer::flush_to_wal;
 use crate::MVCC::visibility::{select_key, modified_key_check, fetch_version_vec_for_key, commit_abort_handler};
 
-pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, stream: Option<&TcpStream>, all_addr: Arc<RwLock<Vec<SocketAddr>>> ) -> io::Result<u8> {
+pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, stream: Option<&TcpStream>, all_addr: Arc<RwLock<Vec<SocketAddr>>> ) -> io::Result<u8> {
     println!("{:?}", cli_input);
 
     let log_message = |message: &str|{
@@ -48,6 +48,8 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                     flush_to_wal(Arc::clone(&file), args)?;
                     let mut mut_txd_count = txd_count.write().unwrap();
                     *mut_txd_count += 1;
+                    
+                    let vid_count = vid_count.read().unwrap();
 
                     {
                         let mut tx = current_transaction.write().unwrap();
@@ -58,7 +60,7 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                                 if let Some(item) = item {
                                     if item.status == TransactionStatus::Committed || item.status == TransactionStatus::Aborted {
                                         tx.ip_txd.insert(addr, *mut_txd_count);
-                                        tx.items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, last_txd: x, modified_keys: Vec::new(), visible_max: *mut_txd_count });
+                                        tx.items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, last_txd: x, modified_keys: Vec::new(), visible_max: *vid_count });
                                         tx.items.remove(&x);
                                     } else {
                                         *mut_txd_count -= 1;
@@ -68,7 +70,7 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                             }
                             None => {
                                 tx.ip_txd.insert(addr, *mut_txd_count);
-                                tx.items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, last_txd: 0, modified_keys: Vec::new(), visible_max: *mut_txd_count });
+                                tx.items.insert(*mut_txd_count, TransactionItems {status: TransactionStatus::Active, last_txd: 0, modified_keys: Vec::new(), visible_max: *vid_count });
 
                             }
                         }
@@ -172,6 +174,9 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                     let txd = current_transaction.read().unwrap().ip_txd.get(&addr).unwrap().clone();
                     let y = modified_key_check(active_txd_vec, key, txd, Arc::clone(&current_transaction) );
 
+                    let mut mut_vid_count = vid_count.write().unwrap();
+                    
+
                     if y {
                         println!("The key you're trying to insert has already been updated by another client.")
                     } else {
@@ -179,7 +184,11 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
-                                let _ = Node::insert(Arc::clone(&new_node), key, value, x);
+                                *mut_vid_count += 1;
+                                drop(mut_vid_count);
+                                
+                                let vid_read = vid_count.read().unwrap();
+                                let _ = Node::insert(Arc::clone(&new_node), key, value, x, *vid_read);
                                 if let Some(item) = tx.items.get_mut(&x) {
                                     item.modified_keys.push(key);
                                 }
@@ -203,6 +212,7 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                     let value = args[2].parse::<String>().expect("Invalid argument");
 
                     let active_txd_vec = get_all_active_transaction(Arc::clone(&current_transaction), all_addr);
+                    let mut mut_vid_count = vid_count.write().unwrap();
 
                     let txd = current_transaction.read().unwrap().ip_txd.get(&addr).unwrap().clone();
                     let y = modified_key_check(active_txd_vec, key, txd, Arc::clone(&current_transaction) );
@@ -214,7 +224,12 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
-                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), x, false) {
+                                *mut_vid_count += 1;
+                                
+                                drop(mut_vid_count);
+                                let vid_read = vid_count.read().unwrap();
+                                
+                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), x, false, *vid_read) {
                                     Some(_) => flush_to_wal(Arc::clone(&file), args)?,
                                     None => log_message("Key not found"),
                                 }
@@ -238,13 +253,20 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, current_transaction: 
                     }
 
                     let key = args[1].parse::<u32>().expect("Invalid argument");
+                    let mut mut_vid_count = vid_count.write().unwrap();
+
 
                     {
                         let tx = current_transaction.read().unwrap();
 
                         match tx.ip_txd.get(&addr) {
                             Some(x) => {
-                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, *x, true) {
+                                *mut_vid_count += 1;
+                                
+                                drop(mut_vid_count);
+                                let vid_read = vid_count.read().unwrap();
+
+                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, *x, true, *vid_read) {
                                     Some(_) => {
                                         flush_to_wal(Arc::clone(&file), args.clone())?;
                                     }

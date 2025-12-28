@@ -37,8 +37,9 @@ fn main() -> io::Result<()> {
     let cloned_transaction = Arc::clone(&current_transaction);
 
     let txd_count = Arc::new(RwLock::new(0));
+    let vid_count = Arc::new(RwLock::new(0));
 
-    // if !is_file_empty(wal_file_path) { initialize_from_wal(wal_file_path, Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), Arc::clone(&all_address)); }
+    // if !is_file_empty(wal_file_path) { initialize_from_wal(wal_file_path, Arc::clone(&txd_count), Arc::clone(&vid_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), Arc::clone(&all_address)); }
 
     let (tx, rx) = mpsc::channel();
     let t1 = thread::spawn(move || {
@@ -55,10 +56,11 @@ fn main() -> io::Result<()> {
         let cloned_transaction = Arc::clone(&current_transaction);
         let cloned_txd_count = Arc::clone(&txd_count);
         let cloned_all_addr = Arc::clone(&all_address);
+        let cloned_vid = Arc::clone(&vid_count);
         let tx_clone = tx.clone();
         match stream {
             Ok(stream) => {
-                thread::spawn(move || process_tcp_stream(stream, wal_file_path, cloned_txd_count, cloned_transaction, cloned_file, cloned_node, cloned_all_addr, tx_clone));
+                thread::spawn(move || process_tcp_stream(stream, wal_file_path, cloned_txd_count, cloned_vid, cloned_transaction, cloned_file, cloned_node, cloned_all_addr, tx_clone));
             }
             Err(e) => println!("Error: {}", e),
         }

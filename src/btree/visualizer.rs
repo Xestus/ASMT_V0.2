@@ -76,7 +76,7 @@ impl Node {
                 let xmax_str = v.xmax
                     .map(|x| x.to_string())
                     .unwrap_or_else(|| "∞".to_string());
-                format!("\"{}\"[{}-{}] - {:?}", v.value, v.xmin, xmax_str, v.version_status)
+                format!("\"{}\"[{}-{}] ({}) - {:?}", v.value, v.xmin, xmax_str, v.version_info.vid, v.version_info.version_status)
             })
             .collect();
 

@@ -22,7 +22,7 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
         let result_max = result[i].xmax;
         let result_min = result[i].xmin;
 
-        if result[i].version_status == VersionStatus::Delete || result[i].version_status == VersionStatus::Abort {
+        if result[i].version_info.version_status == VersionStatus::Delete || result[i].version_info.version_status == VersionStatus::Abort {
             continue;
         }
 
@@ -209,7 +209,7 @@ fn modify_committed_version(node:Arc<RwLock<Node>>, key_position: usize) {
         let ver_len = ver_read_guard.len();
 
         for i in 0..ver_len {
-            if ver_read_guard[i].version_status == VersionStatus::Active {
+            if ver_read_guard[i].version_info.version_status == VersionStatus::Active {
                 modified_version_index.push(i);
             }
         }
@@ -219,7 +219,7 @@ fn modify_committed_version(node:Arc<RwLock<Node>>, key_position: usize) {
         let ver_write_guard = &mut node.write().unwrap().input[key_position].version;
 
         for i in modified_version_index {
-            ver_write_guard[i].version_status = VersionStatus::Commit;
+            ver_write_guard[i].version_info.version_status = VersionStatus::Commit;
         }
     }
 }
@@ -231,7 +231,7 @@ fn modify_aborted_version(node: Arc<RwLock<Node>>, key_position: usize) {
         let ver_read_guard = &node.read().unwrap().input[key_position].version;
         ver_len = ver_read_guard.len();
         for i in 0..ver_len {
-            if ver_read_guard[i].version_status == VersionStatus::Active {
+            if ver_read_guard[i].version_info.version_status == VersionStatus::Active {
                 modified_version_index.push(i);
             }
         }
@@ -240,7 +240,7 @@ fn modify_aborted_version(node: Arc<RwLock<Node>>, key_position: usize) {
     let ver_write_guard = &mut node.write().unwrap().input[key_position].version;
     {
         for i in modified_version_index.iter().rev() {
-            ver_write_guard[*i].version_status = VersionStatus::Abort;
+            ver_write_guard[*i].version_info.version_status = VersionStatus::Abort;
             let xmin_aborted_versions = ver_write_guard[*i].xmin;
             ver_write_guard[*i].xmax = Some(xmin_aborted_versions);
         }
@@ -248,7 +248,7 @@ fn modify_aborted_version(node: Arc<RwLock<Node>>, key_position: usize) {
 
     {
         for i in (0..ver_len).rev() {
-            if ver_write_guard[i].version_status == VersionStatus::Commit {
+            if ver_write_guard[i].version_info.version_status == VersionStatus::Commit {
                 ver_write_guard[i].xmax = None;
             }
         }

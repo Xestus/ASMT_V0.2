@@ -6,7 +6,7 @@ use crate::cli::cli::cli;
 use crate::storage::io::{empty_file, read_file};
 use crate::transactions::transactions::Transaction;
 
-pub fn initialize_from_wal(wal_file_path: &str, txd_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, all_addr: Arc<RwLock<Vec<SocketAddr>>>) {
+pub fn initialize_from_wal(wal_file_path: &str, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, all_addr: Arc<RwLock<Vec<SocketAddr>>>) {
     match read_file(wal_file_path) {
         Ok(value) => {
             let mut uncommitted_strings = Vec::new();
@@ -21,7 +21,7 @@ pub fn initialize_from_wal(wal_file_path: &str, txd_count: Arc<RwLock<u32>>, cur
 
                 if load_to_cli {
                     for vals in uncommitted_strings.iter() {
-                        match cli(vals.clone(), Arc::clone(&txd_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), None, Arc::clone(&all_addr)) {
+                        match cli(vals.clone(), Arc::clone(&txd_count), Arc::clone(&vid_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), None, Arc::clone(&all_addr)) {
                             Ok(_) => {}
                             Err(e) => println!("WAL recovery error: {}", e),
 

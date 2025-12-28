@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 use crate::MVCC::versions::Version;
 
-#[derive(Debug, Clone, PartialEq, Ord, PartialOrd, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct Items {
     pub key: u32,
     pub rank: u32,
