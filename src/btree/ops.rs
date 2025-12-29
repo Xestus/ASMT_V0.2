@@ -4,13 +4,13 @@ use crate::btree::node::{Items, Node};
 use crate::MVCC::versions::{Version, VersionInfo, VersionStatus};
 
 impl Node {
-    pub fn insert(self_node: Arc<RwLock<Node>>, k: u32, v: String, txn: u32, vid: u32) -> io::Result<()> {
+    pub fn insert(self_node: Arc<RwLock<Node>>, k: u32, v: String, txn: u32, vid: u32) -> io::Result<bool> {
         {
             let ver = Version { value: v.clone(), xmin: txn, xmax: None, version_info: VersionInfo {version_status: VersionStatus::Active, vid} };
             match Node::find_and_update_key_version(Arc::clone(&self_node), k, Some(v), txn, false, vid) {
                 Some(_) => {
                     println!("Key already exists");
-                    return Ok(());
+                    return Ok(true);
                 }
                 None => {
                     let version = vec![ver.clone()];
@@ -21,7 +21,7 @@ impl Node {
 
         Node::validate_after_mutation(self_node);
 
-        Ok(())
+        Ok(false)
     }
 
     /// # THIS IS A TEMPORARY HACK SOLUTION. IT'LL STAY THERE TILL I ADD AN ACTUAL THREAD SAFE FUNCTION.
@@ -42,7 +42,15 @@ impl Node {
                         x[ver_count - 1].xmin
                     };
 
-                    write_guard.input[i].version[ver_count - 1].xmax = Option::from(last_xmin);
+                    {
+                        write_guard.input[i].version[ver_count - 1].xmax = Option::from(txn);
+                    }
+                    {
+                        write_guard.input[i].version[ver_count - 1].version_info.version_status = VersionStatus::DeleteActive;
+                    }
+                    {
+                        write_guard.input[i].version[ver_count - 1].version_info.vid = vid;
+                    }
                 } else {
                     write_guard.input[i].version[ver_count - 1].xmax = Option::from(txn);
                 }

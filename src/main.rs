@@ -39,7 +39,15 @@ fn main() -> io::Result<()> {
     let txd_count = Arc::new(RwLock::new(0));
     let vid_count = Arc::new(RwLock::new(0));
 
-    // if !is_file_empty(wal_file_path) { initialize_from_wal(wal_file_path, Arc::clone(&txd_count), Arc::clone(&vid_count), Arc::clone(&current_transaction), Arc::clone(&file), Arc::clone(&new_node), Arc::clone(&all_address)); }
+    if !is_file_empty(wal_file_path) { initialize_from_wal(wal_file_path,
+                                                           Arc::clone(&txd_count),
+                                                           Arc::clone(&vid_count),
+                                                           Arc::new(RwLock::new(Transaction { items: HashMap::new(), ip_txd: HashMap::new() })),
+                                                           Arc::clone(&file),
+                                                           Arc::clone(&new_node),
+                                                           Arc::new(RwLock::new(Vec::new()))); }
+
+
 
     let (tx, rx) = mpsc::channel();
     let t1 = thread::spawn(move || {

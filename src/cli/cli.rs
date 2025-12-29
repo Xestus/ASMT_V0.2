@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::Write;
 use std::fs::File;
 use std::io;
@@ -48,7 +49,7 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                     flush_to_wal(Arc::clone(&file), args)?;
                     let mut mut_txd_count = txd_count.write().unwrap();
                     *mut_txd_count += 1;
-                    
+
                     let vid_count = vid_count.read().unwrap();
 
                     {
@@ -142,16 +143,15 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                                         for j in modified_key_vec.iter() {
                                             commit_abort_handler(Arc::clone(&new_node), *j, false);
                                         }
-                                        println!("B");
 
                                     } else {
-                                        println!("Active transaction not found. Abort failed.");
+                                        log_message("Active transaction not found. Abort failed.");
                                         return Ok(1);
                                     }
                                 }
                             },
                             None => {
-                                println!("Active transaction not found. Abort failed.");
+                                log_message("Active transaction not found. Abort failed.");
                                 return Ok(1);
                             }
                         }
@@ -163,9 +163,6 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                         log_message("Invalid argument");
                         return Ok(1);
                     }
-
-                    flush_to_wal(Arc::clone(&file), args.clone())?;
-
                     let key = args[1].parse::<u32>().expect("Invalid argument");
                     let value = args[2].parse::<String>().expect("Invalid argument");
 
@@ -175,7 +172,6 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                     let y = modified_key_check(active_txd_vec, key, txd, Arc::clone(&current_transaction) );
 
                     let mut mut_vid_count = vid_count.write().unwrap();
-                    
 
                     if y {
                         println!("The key you're trying to insert has already been updated by another client.")
@@ -184,13 +180,19 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
+                                flush_to_wal(Arc::clone(&file), args.clone())?;
+
                                 *mut_vid_count += 1;
                                 drop(mut_vid_count);
-                                
+
                                 let vid_read = vid_count.read().unwrap();
-                                let _ = Node::insert(Arc::clone(&new_node), key, value, x, *vid_read);
-                                if let Some(item) = tx.items.get_mut(&x) {
-                                    item.modified_keys.push(key);
+
+                                if let Ok(exists) = Node::insert(Arc::clone(&new_node), key, value, x, *vid_read) {
+                                    if !exists {
+                                        if let Some(item) = tx.items.get_mut(&x) {
+                                            item.modified_keys.push(key);
+                                        }
+                                    }
                                 }
                             }
                             None => {
@@ -218,28 +220,29 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                     let y = modified_key_check(active_txd_vec, key, txd, Arc::clone(&current_transaction) );
 
                     if y {
-                        println!("The key you're trying to update has already been updated by another client.")
+                        log_message("The key you're trying to update has already been updated by another client.")
                     } else {
                         let mut tx = current_transaction.write().unwrap();
 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
                                 *mut_vid_count += 1;
-                                
+
                                 drop(mut_vid_count);
                                 let vid_read = vid_count.read().unwrap();
-                                
-                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), x, false, *vid_read) {
-                                    Some(_) => flush_to_wal(Arc::clone(&file), args)?,
-                                    None => log_message("Key not found"),
-                                }
 
-                                if let Some(item) = tx.items.get_mut(&x) {
-                                    item.modified_keys.push(key);
+                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), x, false, *vid_read) {
+                                    Some(_) => {
+                                        flush_to_wal(Arc::clone(&file), args)?;
+                                        if let Some(item) = tx.items.get_mut(&x) {
+                                            item.modified_keys.push(key);
+                                        }
+                                    },
+                                    None => log_message("Key not found"),
                                 }
                             }
                             None => {
-                                println!("Active transaction not found. Update failed.");
+                                log_message("Active transaction not found. Update failed.");
                                 return Ok(1);
                             }
                         }
@@ -255,30 +258,38 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                     let key = args[1].parse::<u32>().expect("Invalid argument");
                     let mut mut_vid_count = vid_count.write().unwrap();
 
-
                     {
-                        let tx = current_transaction.read().unwrap();
+                        let mut tx = current_transaction.write().unwrap();
 
                         match tx.ip_txd.get(&addr) {
-                            Some(x) => {
+                            Some(&x) => {
                                 *mut_vid_count += 1;
-                                
+
                                 drop(mut_vid_count);
                                 let vid_read = vid_count.read().unwrap();
 
-                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, *x, true, *vid_read) {
+                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, x, true, *vid_read) {
                                     Some(_) => {
                                         flush_to_wal(Arc::clone(&file), args.clone())?;
+
                                     }
                                     None => log_message("Key not found"),
                                 }
+
+                                if let Some(item) = tx.items.get_mut(&x) {
+                                    item.modified_keys.push(key);
+                                }
+
                             }
                             None => {
-                                println!("Active transaction not found. Update failed.");
+                                log_message("Active transaction not found. Update failed.");
                                 return Ok(1);
                             }
                         }
                     }
+
+
+
                 }
 
                 "checkpoint" => {
@@ -286,8 +297,6 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                         log_message("Invalid argument");
                         return Ok(1);
                     }
-
-                    println!("HELLO");
                     return Ok(3);
                 }
 
