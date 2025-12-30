@@ -13,4 +13,4 @@ pub struct VersionInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub enum VersionStatus {Active, Commit, Abort, Delete}
+pub enum VersionStatus {Active, Commit, Abort, DeleteActive, DeleteCommit}

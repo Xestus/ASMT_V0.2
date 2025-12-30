@@ -22,7 +22,7 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
         let result_max = result[i].xmax;
         let result_min = result[i].xmin;
 
-        if result[i].version_info.version_status == VersionStatus::Delete || result[i].version_info.version_status == VersionStatus::Abort {
+        if result[i].version_info.version_status == VersionStatus::DeleteCommit || result[i].version_info.version_status == VersionStatus::Abort {
             continue;
         }
 
@@ -38,15 +38,16 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
 
         match result_max {
             Some(xmax) => {
-                if xmax >= last_txd {
-                    visible_xmax = true;
-                    // visible -- xmax >= current_txd_id
-                }
 
                 let max_status = status_read_guard.items.get(&xmax);
 
-                if let Some(max_temp_status) = max_status {
-                    if let TransactionStatus::Active = max_temp_status.status {
+                if current_txd == xmax && result[i].version_info.version_status == VersionStatus::DeleteActive {
+                    visible_xmax = false;
+                } else if xmax > last_txd {
+                    visible_xmax = true;
+                    // visible -- xmax >= current_txd_id
+                } else if let Some(max_temp_status) = max_status {
+                    if let TransactionStatus::Active = max_temp_status.status{
                         visible_xmax = true;
                         // visible -- xmax == ACTIVE
                     }
@@ -76,7 +77,6 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
                     }
                 }
                 None => {
-                    println!("SHOULD BE HERE");
                     visible_xmin = true;
                 }
             }
@@ -197,12 +197,15 @@ pub fn commit_abort_handler(node: Arc<RwLock<Node>>, key: u32, commit: bool ) {
             println!("No keys were modified in current transaction.");
         }
 
-        _ => {},
+        _ => {
+        },
     }
 }
 
 fn modify_committed_version(node:Arc<RwLock<Node>>, key_position: usize) {
-    let mut modified_version_index = Vec::new();
+    let mut modified_active_versions = Vec::new();
+    let mut modified_delete_versions = Vec::new();
+
 
     {
         let ver_read_guard = &node.read().unwrap().input[key_position].version;
@@ -210,17 +213,26 @@ fn modify_committed_version(node:Arc<RwLock<Node>>, key_position: usize) {
 
         for i in 0..ver_len {
             if ver_read_guard[i].version_info.version_status == VersionStatus::Active {
-                modified_version_index.push(i);
+                modified_active_versions.push(i);
+            } else if ver_read_guard[i].version_info.version_status == VersionStatus::DeleteActive {
+                modified_delete_versions.push(i);
             }
         }
     }
-
     {
         let ver_write_guard = &mut node.write().unwrap().input[key_position].version;
 
-        for i in modified_version_index {
-            ver_write_guard[i].version_info.version_status = VersionStatus::Commit;
+        {
+            for i in modified_active_versions {
+                ver_write_guard[i].version_info.version_status = VersionStatus::Commit;
+            }
         }
+        {
+            for i in modified_delete_versions {
+                ver_write_guard[i].version_info.version_status = VersionStatus::DeleteCommit;
+            }
+        }
+
     }
 }
 
