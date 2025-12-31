@@ -3,7 +3,7 @@ use crate::btree::node::{Items, Node};
 use crate::MVCC::versions::{Version, VersionStatus};
 use crate::transactions::transactions::*;
 
-pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u32, status: Arc<RwLock<Transaction>>) -> Option<String> {
+pub fn select_key(node: Arc<RwLock<Node>>, k: u32, current_txd: u32, status: Arc<RwLock<Transaction>>) -> Option<String> {
     // HAck: Looks inefficient, redo it later
     let mut result = Vec::new();
     match fetch_items_for_key(node, k) {
@@ -43,7 +43,7 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
 
                 if current_txd == xmax && result[i].version_info.version_status == VersionStatus::DeleteActive {
                     visible_xmax = false;
-                } else if xmax > last_txd {
+                } else if xmax > current_txd {
                     visible_xmax = true;
                     // visible -- xmax >= current_txd_id
                 } else if let Some(max_temp_status) = max_status {
@@ -82,7 +82,7 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, last_txd: u32, current_txd: u
             }
         }
 
-        println!("Visible XMAX: {:?} ... Visible XMIN: {:?}", visible_xmax, visible_xmin);
+        println!("For {:#?}, \n Visible XMAX: {:?} ... Visible XMIN: {:?}", result[i], visible_xmax, visible_xmin);
 
         if visible_xmax && visible_xmin {
             selected_keys.push(result[i].value.clone());

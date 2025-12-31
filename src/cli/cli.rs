@@ -118,7 +118,6 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                     }
                 }
 
-                // remove the new version when "abort"
                 "abort" => {
                     if args.len() != 2 {
                         log_message("Invalid argument");
@@ -315,7 +314,7 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                                 // let last_txd = tx.items.get(&x).unwrap().last_txd;
 
                                 let messages ;
-                                match select_key(Arc::clone(&new_node), key, *txd_count.read().unwrap(), x, Arc::clone(&current_transaction)) {
+                                match select_key(Arc::clone(&new_node), key, *txd_count.read().unwrap(), Arc::clone(&current_transaction)) {
                                     Some(value) => {
                                         messages = format!("Value: {:?}", value)
                                     },

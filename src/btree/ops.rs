@@ -37,27 +37,17 @@ impl Node {
                 let ver_count = write_guard.input[i].version.len();
 
                 if delete {
-                    let last_xmin = {
-                        let x = &write_guard.input[i].version;
-                        x[ver_count - 1].xmin
-                    };
+                    write_guard.input[i].version[ver_count - 1].xmax = Option::from(txn);
+                    write_guard.input[i].version[ver_count - 1].version_info.version_status = VersionStatus::DeleteActive;
+                    write_guard.input[i].version[ver_count - 1].version_info.vid = vid;
 
-                    {
-                        write_guard.input[i].version[ver_count - 1].xmax = Option::from(txn);
-                    }
-                    {
-                        write_guard.input[i].version[ver_count - 1].version_info.version_status = VersionStatus::DeleteActive;
-                    }
-                    {
-                        write_guard.input[i].version[ver_count - 1].version_info.vid = vid;
+                    if ver_count >= 2 {
+                        write_guard.input[i].version[ver_count - 2].xmax = None;
                     }
                 } else {
                     write_guard.input[i].version[ver_count - 1].xmax = Option::from(txn);
                 }
 
-                if ver_count >= 2 {
-                    write_guard.input[i].version[ver_count - 2].xmax = None;
-                }
 
                 if let Some(value) = v {
                     let ver = Version {
