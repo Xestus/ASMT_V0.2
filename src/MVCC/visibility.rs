@@ -64,7 +64,7 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, current_txd: u32, status: Arc
             }
         }
 
-        if status_read_guard.items.get(&current_txd)?.visible_max < result_min {
+        if status_read_guard.items.get(&current_txd)?.visible_max < result[i].version_info.vid {
             visible_xmin = false;
         } else if result_min == current_txd {
             visible_xmin = true;

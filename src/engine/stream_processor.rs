@@ -21,13 +21,16 @@ pub fn process_tcp_stream(mut stream: TcpStream, wal_file_path: &str, txd_count:
         buffer.clear();
 
         match reader.read_line(&mut buffer) {
-            Ok(0) => {
-                println!("Client {} disconnected", stream.peer_addr()?);
-                break;
-            }
+            Ok(n) => {
+                let command ;
 
-            Ok(_) => {
-                let command = buffer.trim().to_string();
+                if n == 0 {
+                    println!("Client {} disconnected", stream.peer_addr()?);
+                    println!("Rollback all uncommitted changes");
+                    command = String::from("abort");
+                } else {
+                    command = buffer.trim().to_string()
+                }
 
                 let addr = stream.peer_addr()?;
                 let command = format!("{} {}", command, addr);
@@ -36,7 +39,6 @@ pub fn process_tcp_stream(mut stream: TcpStream, wal_file_path: &str, txd_count:
                     Ok(1) => continue,
                     Ok(2) => break,
                     Ok(3) => {
-                        println!(":HI");
                         CHECKPOINT_COUNTER.store(100, Ordering::Relaxed);
                     }
                     Ok(_) => {}
@@ -46,7 +48,7 @@ pub fn process_tcp_stream(mut stream: TcpStream, wal_file_path: &str, txd_count:
                 let metadata = fs::metadata(wal_file_path)?;
                 let size = metadata.len();
 
-                if CHECKPOINT_COUNTER.load(Ordering::Relaxed) >= 100 || size >= 1024 {
+                if CHECKPOINT_COUNTER.load(Ordering::Relaxed) >= 100 || size >= 4096 {
                     tx.send(1).unwrap();
                     println!("Maximum WAL file size exceeded.");
                     CHECKPOINT_COUNTER.store(0, Ordering::Relaxed);
