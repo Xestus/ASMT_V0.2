@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 use crate::btree::node::{Items, Node};
 use crate::MVCC::versions::{Version, VersionStatus};
@@ -297,6 +298,21 @@ fn push_to_stack(key: u32, stack: &mut Vec<Arc<RwLock<Node>>>, current: RwLockRe
                     stack.push(Arc::clone(&current.children[i + 1]));
                 }
             }
+        }
+    }
+}
+
+pub fn time_ord_check (key: u32, ts_ord: Arc<RwLock<HashMap<u32, u32>>>, current_txd: u32) -> bool {
+    match ts_ord.read().unwrap().get(&key) {
+        Some(val) => {
+            if current_txd < *val {
+                false
+            } else {
+                true
+            }
+        },
+        None => {
+            true
         }
     }
 }

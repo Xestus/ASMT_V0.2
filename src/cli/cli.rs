@@ -12,9 +12,9 @@ use crate::MVCC::snapshot::snapshot;
 use crate::transactions::transactions::{Transaction, TransactionItems, TransactionStatus};
 use crate::transactions::manager::get_all_active_transaction;
 use crate::storage::wal::writer::flush_to_wal;
-use crate::MVCC::visibility::{select_key, modified_key_check, fetch_version_vec_for_key, commit_abort_handler};
+use crate::MVCC::visibility::{select_key, modified_key_check, fetch_version_vec_for_key, commit_abort_handler, time_ord_check};
 
-pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, stream: Option<&TcpStream>, all_addr: Arc<RwLock<Vec<SocketAddr>>> ) -> io::Result<u8> {
+pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, stream: Option<&TcpStream>, all_addr: Arc<RwLock<Vec<SocketAddr>>>, ts_ord: Arc<RwLock<HashMap<u32, u32>>> ) -> io::Result<u8> {
     println!("{:?}", cli_input);
 
     let log_message = |message: &str|{
@@ -217,8 +217,9 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
 
                     let txd = current_transaction.read().unwrap().ip_txd.get(&addr).unwrap().clone();
                     let y = modified_key_check(active_txd_vec, key, txd, Arc::clone(&current_transaction) );
+                    let modifiable_acc_to_ts_ord = time_ord_check(key, Arc::clone(&ts_ord), txd);
 
-                    if y {
+                    if y || !modifiable_acc_to_ts_ord {
                         log_message("The key you're trying to update has already been updated by another client.")
                     } else {
                         let mut tx = current_transaction.write().unwrap();
@@ -236,6 +237,8 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                                         if let Some(item) = tx.items.get_mut(&x) {
                                             item.modified_keys.push(key);
                                         }
+
+                                        ts_ord.write().unwrap().insert(key, txd);
                                     },
                                     None => log_message("Key not found"),
                                 }
@@ -257,7 +260,14 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                     let key = args[1].parse::<u32>().expect("Invalid argument");
                     let mut mut_vid_count = vid_count.write().unwrap();
 
-                    {
+                    let active_txd_vec = get_all_active_transaction(Arc::clone(&current_transaction), all_addr);
+                    let txd = current_transaction.read().unwrap().ip_txd.get(&addr).unwrap().clone();
+                    let y = modified_key_check(active_txd_vec, key, txd, Arc::clone(&current_transaction) );
+                    let modifiable_acc_to_ts_ord = time_ord_check(key, Arc::clone(&ts_ord), txd);
+
+                    if y || !modifiable_acc_to_ts_ord {
+                        log_message("The key you're trying to update has already been updated by another client.")
+                    } else {
                         let mut tx = current_transaction.write().unwrap();
 
                         match tx.ip_txd.get(&addr) {
@@ -270,6 +280,7 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                                 match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, x, true, *vid_read) {
                                     Some(_) => {
                                         flush_to_wal(Arc::clone(&file), args.clone())?;
+                                        ts_ord.write().unwrap().insert(key, txd);
 
                                     }
                                     None => log_message("Key not found"),
@@ -286,8 +297,6 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                             }
                         }
                     }
-
-
 
                 }
 
@@ -311,10 +320,8 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
-                                // let last_txd = tx.items.get(&x).unwrap().last_txd;
-
                                 let messages ;
-                                match select_key(Arc::clone(&new_node), key, *txd_count.read().unwrap(), Arc::clone(&current_transaction)) {
+                                match select_key(Arc::clone(&new_node), key, x, Arc::clone(&current_transaction)) {
                                     Some(value) => {
                                         messages = format!("Value: {:?}", value)
                                     },

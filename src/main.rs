@@ -12,6 +12,8 @@ use ASMT::btree::node::Node;
 use ASMT::transactions::transactions::Transaction;
 use ASMT::storage::wal::recovery::initialize_from_wal;
 
+
+// TODO: FIGURE OUT THE REASON OF WRAPPING EVERY ARGS WITH ARC<MUTEX<T>>
 fn main() -> io::Result<()> {
     NODE_SIZE.set(4).expect("Failed to set size");
     let serialized_file_path = "/home/_merinh/RustroverProjects/ASMT_V0.2/example.txt";
@@ -31,10 +33,6 @@ fn main() -> io::Result<()> {
         .create(true)
         .open(wal_file_path)?));
 
-    let cloned_node = Arc::clone(&new_node);
-    let cloned_file = Arc::clone(&file);
-    let cloned_addr = Arc::clone(&all_address);
-    let cloned_transaction = Arc::clone(&current_transaction);
 
     let txd_count = Arc::new(RwLock::new(0));
     let vid_count = Arc::new(RwLock::new(0));
@@ -45,9 +43,15 @@ fn main() -> io::Result<()> {
                                                            Arc::new(RwLock::new(Transaction { items: HashMap::new(), ip_txd: HashMap::new() })),
                                                            Arc::clone(&file),
                                                            Arc::clone(&new_node),
-                                                           Arc::new(RwLock::new(Vec::new()))); }
+                                                           Arc::new(RwLock::new(Vec::new())),
+                                                           Arc::new(RwLock::new(HashMap::new())) )}
 
 
+    let cloned_node = Arc::clone(&new_node);
+    let cloned_file = Arc::clone(&file);
+    let cloned_addr = Arc::clone(&all_address);
+    let cloned_transaction = Arc::clone(&current_transaction);
+    let timestamp_ordering: Arc<RwLock<HashMap<u32, u32>>> = Arc::new(RwLock::new(HashMap::new()));
 
     let (tx, rx) = mpsc::channel();
     let t1 = thread::spawn(move || {
@@ -66,9 +70,10 @@ fn main() -> io::Result<()> {
         let cloned_all_addr = Arc::clone(&all_address);
         let cloned_vid = Arc::clone(&vid_count);
         let tx_clone = tx.clone();
+        let ts_ord_clone = Arc::clone(&timestamp_ordering);
         match stream {
             Ok(stream) => {
-                thread::spawn(move || process_tcp_stream(stream, wal_file_path, cloned_txd_count, cloned_vid, cloned_transaction, cloned_file, cloned_node, cloned_all_addr, tx_clone));
+                thread::spawn(move || process_tcp_stream(stream, wal_file_path, cloned_txd_count, cloned_vid, cloned_transaction, cloned_file, cloned_node, cloned_all_addr,ts_ord_clone, tx_clone));
             }
             Err(e) => println!("Error: {}", e),
         }
