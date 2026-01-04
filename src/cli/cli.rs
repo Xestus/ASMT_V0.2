@@ -227,20 +227,24 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
                                 *mut_vid_count += 1;
+                                println!("{:?}", tx.items.get(&x));
 
-                                drop(mut_vid_count);
-                                let vid_read = vid_count.read().unwrap();
+                                if tx.items.get(&x).unwrap().status == TransactionStatus::Active {
 
-                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), x, false, *vid_read) {
-                                    Some(_) => {
-                                        flush_to_wal(Arc::clone(&file), args)?;
-                                        if let Some(item) = tx.items.get_mut(&x) {
-                                            item.modified_keys.push(key);
-                                        }
+                                    drop(mut_vid_count);
+                                    let vid_read = vid_count.read().unwrap();
 
-                                        ts_ord.write().unwrap().insert(key, txd);
-                                    },
-                                    None => log_message("Key not found"),
+                                    match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), x, false, *vid_read) {
+                                        Some(_) => {
+                                            flush_to_wal(Arc::clone(&file), args)?;
+                                            if let Some(item) = tx.items.get_mut(&x) {
+                                                item.modified_keys.push(key);
+                                            }
+
+                                            ts_ord.write().unwrap().insert(key, txd);
+                                        },
+                                        None => log_message("Key not found"),
+                                    }
                                 }
                             }
                             None => {
@@ -277,22 +281,22 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                                 drop(mut_vid_count);
                                 let vid_read = vid_count.read().unwrap();
 
-                                match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, x, true, *vid_read) {
-                                    Some(_) => {
-                                        flush_to_wal(Arc::clone(&file), args.clone())?;
-                                        ts_ord.write().unwrap().insert(key, txd);
-
+                                if tx.items.get(&x).unwrap().status == TransactionStatus::Active {
+                                    match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, x, true, *vid_read) {
+                                        Some(_) => {
+                                            flush_to_wal(Arc::clone(&file), args.clone())?;
+                                            ts_ord.write().unwrap().insert(key, txd);
+                                        }
+                                        None => log_message("Key not found"),
                                     }
-                                    None => log_message("Key not found"),
-                                }
 
-                                if let Some(item) = tx.items.get_mut(&x) {
-                                    item.modified_keys.push(key);
+                                    if let Some(item) = tx.items.get_mut(&x) {
+                                        item.modified_keys.push(key);
+                                    }
                                 }
-
                             }
                             None => {
-                                log_message("Active transaction not found. Update failed.");
+                                log_message("Active transaction not found. Delete failed.");
                                 return Ok(1);
                             }
                         }

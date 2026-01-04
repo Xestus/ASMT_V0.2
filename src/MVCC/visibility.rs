@@ -37,6 +37,8 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, current_txd: u32, status: Arc
 
         let (mut visible_xmax, mut visible_xmin) = (false, false);
 
+        println!("Current version vid: {:?} || current transaction vid: {:?}", result[i].version_info.vid , status_read_guard.items.get(&current_txd)?.visible_max);
+
         match result_max {
             Some(xmax) => {
 
@@ -65,7 +67,7 @@ pub fn select_key(node: Arc<RwLock<Node>>, k: u32, current_txd: u32, status: Arc
             }
         }
 
-        if status_read_guard.items.get(&current_txd)?.visible_max < result[i].version_info.vid {
+        if status_read_guard.items.get(&current_txd)?.visible_max < result[i].version_info.vid && (result[i].version_info.version_status != VersionStatus::DeleteActive && result[i].version_info.version_status != VersionStatus::DeleteCommit) {
             visible_xmin = false;
         } else if result_min == current_txd {
             visible_xmin = true;
