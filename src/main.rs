@@ -17,7 +17,7 @@ use ASMT::storage::wal::recovery::initialize_from_wal;
 fn main() -> io::Result<()> {
     NODE_SIZE.set(4).expect("Failed to set size");
     let serialized_file_path = "/home/_merinh/RustroverProjects/ASMT_V0.2/example.txt";
-    let wal_file_path = "/home/_merinh/RustroverProjects/ASMT_V0.2/WAL.txt";
+    let wal_file_path = "/home/_merinh/RustroverProjects/ASMT_V0.2/WAL.bat";
     let mut new_node = Node::new();
 
     let current_transaction = Arc::new(RwLock::new(Transaction { items: HashMap::new(), ip_txd: HashMap::new() }));
@@ -27,7 +27,7 @@ fn main() -> io::Result<()> {
         Ok(node) =>  new_node = node,
         Err(e) => println!("{:?}", e),
     }
-
+    
     let file = Arc::new(RwLock::new(OpenOptions::new()
         .append(true)
         .create(true)
@@ -36,12 +36,13 @@ fn main() -> io::Result<()> {
 
     let txd_count = Arc::new(RwLock::new(0));
     let vid_count = Arc::new(RwLock::new(0));
+    let prev_lsn = Arc::new(RwLock::new(0));
 
     if !is_file_empty(wal_file_path) { initialize_from_wal(wal_file_path,
                                                            Arc::clone(&txd_count),
                                                            Arc::clone(&vid_count),
+                                                           Arc::clone(&prev_lsn),
                                                            Arc::new(RwLock::new(Transaction { items: HashMap::new(), ip_txd: HashMap::new() })),
-                                                           Arc::clone(&file),
                                                            Arc::clone(&new_node),
                                                            Arc::new(RwLock::new(Vec::new())),
                                                            Arc::new(RwLock::new(HashMap::new())) )}
@@ -64,16 +65,16 @@ fn main() -> io::Result<()> {
     println!("Server listening on port 8080");
     for stream in listener.incoming() {
         let cloned_node = Arc::clone(&new_node);
-        let cloned_file = Arc::clone(&file);
         let cloned_transaction = Arc::clone(&current_transaction);
         let cloned_txd_count = Arc::clone(&txd_count);
         let cloned_all_addr = Arc::clone(&all_address);
         let cloned_vid = Arc::clone(&vid_count);
+        let cloned_prev_lsn = Arc::clone(&prev_lsn);
         let tx_clone = tx.clone();
         let ts_ord_clone = Arc::clone(&timestamp_ordering);
         match stream {
             Ok(stream) => {
-                thread::spawn(move || process_tcp_stream(stream, wal_file_path, cloned_txd_count, cloned_vid, cloned_transaction, cloned_file, cloned_node, cloned_all_addr,ts_ord_clone, tx_clone));
+                thread::spawn(move || process_tcp_stream(stream, wal_file_path, cloned_txd_count, cloned_vid,cloned_prev_lsn ,cloned_transaction, cloned_node, cloned_all_addr,ts_ord_clone, tx_clone));
             }
             Err(e) => println!("Error: {}", e),
         }

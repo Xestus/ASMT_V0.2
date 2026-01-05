@@ -9,7 +9,7 @@ use crate::MVCC::snapshot::snapshot;
 use crate::storage::io::empty_file;
 use crate::storage::ser::serialize;
 use crate::storage::wal::reader::get_uncommitted_transactions;
-use crate::storage::wal::writer::flush_to_wal;
+// use crate::storage::wal::writer::flush_to_wal;
 use crate::transactions::manager::get_all_active_transaction;
 use crate::transactions::transactions::Transaction;
 
@@ -17,10 +17,9 @@ pub fn checkpoint(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_
     let all_active_txd =  get_all_active_transaction(transaction, all_addr);
     
     if all_active_txd.len() == 0 { 
-        println!("The given transaction has no active transaction. That's odd. HMM");
+        println!("The given transaction has no active transaction.");
     } else {
-        let x = all_active_txd.first().unwrap();
-        remove_dead_version(Arc::clone(&node), *x);
+        remove_dead_version(Arc::clone(&node), *all_active_txd.first().unwrap());
     }
     
     let mut cloned_node = node.clone();
@@ -32,7 +31,7 @@ pub fn checkpoint(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_
         Err(e) =>  println!("Serialization failed: {}", e),
     }
 
-    match get_uncommitted_transactions(wal_file_path) {
+/*    match get_uncommitted_transactions(wal_file_path) {
         Ok(uncommitted_strings) => match empty_file(wal_file_path) {
             Ok(_) => {
                 for strs in uncommitted_strings.iter() {
@@ -47,7 +46,7 @@ pub fn checkpoint(node: Arc<RwLock<Node>>, serialized_file_path: &str, wal_file_
         },
         Err(e) => println!("Can't fetch uncommitted transactions: {}", e),
     }
-
+*/
     println!("{:?}", cloned_node.read().unwrap().print_tree());
 
     CHECKPOINT_COUNTER.store(0, Ordering::Relaxed);

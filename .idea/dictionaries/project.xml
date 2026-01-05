@@ -2,6 +2,9 @@
   <dictionary name="project">
     <words>
       <w>myahhh</w>
+      <w>txid</w>
+      <w>xmax</w>
+      <w>xmin</w>
     </words>
   </dictionary>
 </component>

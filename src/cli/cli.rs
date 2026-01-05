@@ -13,8 +13,9 @@ use crate::transactions::transactions::{Transaction, TransactionItems, Transacti
 use crate::transactions::manager::get_all_active_transaction;
 use crate::storage::wal::writer::flush_to_wal;
 use crate::MVCC::visibility::{select_key, modified_key_check, fetch_version_vec_for_key, commit_abort_handler, time_ord_check};
+use crate::storage::wal::record::Payload;
 
-pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock<u32>>, current_transaction: Arc<RwLock<Transaction>>, file: Arc<RwLock<File>>, new_node: Arc<RwLock<Node>>, stream: Option<&TcpStream>, all_addr: Arc<RwLock<Vec<SocketAddr>>>, ts_ord: Arc<RwLock<HashMap<u32, u32>>> ) -> io::Result<u8> {
+pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock<u32>>, prev_lsn: Arc<RwLock<u64>>, current_transaction: Arc<RwLock<Transaction>>, new_node: Arc<RwLock<Node>>, stream: Option<&TcpStream>, all_addr: Arc<RwLock<Vec<SocketAddr>>>, ts_ord: Arc<RwLock<HashMap<u32, u32>>> ) -> io::Result<u8> {
     println!("{:?}", cli_input);
 
     let log_message = |message: &str|{
@@ -38,7 +39,8 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
             drop(all_addr_write);
 
             if args.is_empty() { return Ok(1); }
-            match args[0].to_lowercase().as_str() {
+            let args_lowercase = args[0].to_lowercase();
+            match args_lowercase.as_str() {
                 "begin" => {
                     if args.len() != 2 {
                         log_message("Invalid argument");
@@ -46,7 +48,13 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                         return Ok(1);
                     }
 
-                    flush_to_wal(Arc::clone(&file), args)?;
+                    let new_lsn = flush_to_wal(args_lowercase, None, *prev_lsn.read().unwrap())?;
+
+                    {
+                        let mut write_lsn = prev_lsn.write().unwrap();
+                        *write_lsn = new_lsn;
+                    }
+
                     let mut mut_txd_count = txd_count.write().unwrap();
                     *mut_txd_count += 1;
 
@@ -84,8 +92,13 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                         return Ok(1);
                     }
 
-                    flush_to_wal(Arc::clone(&file), args)?;
+                    let new_lsn = flush_to_wal(args_lowercase, None, *prev_lsn.read().unwrap())?;
 
+                    {
+                        let mut write_lsn = prev_lsn.write().unwrap();
+                        *write_lsn = new_lsn;
+                    }
+                    
                     {
                         let mut tx = current_transaction.write().unwrap();
 
@@ -123,7 +136,12 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                         log_message("Invalid argument");
                         return Ok(1);
                     }
-                    flush_to_wal(Arc::clone(&file), args)?;
+                    let new_lsn = flush_to_wal(args_lowercase, None, *prev_lsn.read().unwrap())?;
+
+                    {
+                        let mut write_lsn = prev_lsn.write().unwrap();
+                        *write_lsn = new_lsn;
+                    }
 
                     {
                         let mut tx = current_transaction.write().unwrap();
@@ -179,8 +197,12 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
 
                         match tx.ip_txd.get(&addr) {
                             Some(&x) => {
-                                flush_to_wal(Arc::clone(&file), args.clone())?;
-
+                                let new_lsn = flush_to_wal(args_lowercase, Some(Payload{k: key, v: Some(value.clone()), txid: x }), *prev_lsn.read().unwrap())?;
+                                {
+                                    let mut write_lsn = prev_lsn.write().unwrap();
+                                    *write_lsn = new_lsn;
+                                }
+                                
                                 *mut_vid_count += 1;
                                 drop(mut_vid_count);
 
@@ -234,10 +256,13 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                                     drop(mut_vid_count);
                                     let vid_read = vid_count.read().unwrap();
 
-                                    match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value), x, false, *vid_read) {
+                                    match Node::find_and_update_key_version(Arc::clone(&new_node), key, Some(value.clone()), x, false, *vid_read) {
                                         Some(_) => {
-                                            flush_to_wal(Arc::clone(&file), args)?;
-                                            if let Some(item) = tx.items.get_mut(&x) {
+                                            let new_lsn = flush_to_wal(args_lowercase, Some(Payload{k: key, v: Some(value), txid: x }), *prev_lsn.read().unwrap())?;
+                                            {
+                                                let mut write_lsn = prev_lsn.write().unwrap();
+                                                *write_lsn = new_lsn;
+                                            }                                            if let Some(item) = tx.items.get_mut(&x) {
                                                 item.modified_keys.push(key);
                                             }
 
@@ -284,7 +309,11 @@ pub fn cli(cli_input: String, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock
                                 if tx.items.get(&x).unwrap().status == TransactionStatus::Active {
                                     match Node::find_and_update_key_version(Arc::clone(&new_node), key, None, x, true, *vid_read) {
                                         Some(_) => {
-                                            flush_to_wal(Arc::clone(&file), args.clone())?;
+                                            let new_lsn = flush_to_wal(args_lowercase, Some(Payload{k: key, v: None, txid: x }), *prev_lsn.read().unwrap())?;
+                                            {
+                                                let mut write_lsn = prev_lsn.write().unwrap();
+                                                *write_lsn = new_lsn;
+                                            }
                                             ts_ord.write().unwrap().insert(key, txd);
                                         }
                                         None => log_message("Key not found"),

@@ -4,7 +4,6 @@ use crate::transactions::transactions::{Transaction, TransactionStatus};
 
 pub fn get_all_active_transaction(current_transactions: Arc<RwLock<Transaction>>, all_addr: Arc<RwLock<Vec<SocketAddr>>>) -> Vec<u32> {
     let mut all_txd = Vec::new();
-
     {
         let tx = current_transactions.read().unwrap();
         let addr_read = all_addr.read().unwrap();
@@ -20,8 +19,8 @@ pub fn get_all_active_transaction(current_transactions: Arc<RwLock<Transaction>>
             }
         }
     }
-
     all_txd.sort();
+    all_txd.dedup();
     
     all_txd
 }
