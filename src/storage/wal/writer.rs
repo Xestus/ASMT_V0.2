@@ -1,19 +1,8 @@
 use std::io::{BufWriter, Seek, Write};
-use std::fs::File;
+use std::fs::{ OpenOptions};
 use std::io;
 use crate::storage::wal::record::{Payload, RecordStruct};
 use serde::{Serialize};
-
-/*pub fn flush_to_wal(file: Arc<RwLock<File>>, args: Vec<&str>) -> io::Result<()> {
-    let args = args.join(" ");
-
-    let mut file_instance = file.write().unwrap();
-
-    writeln!(file_instance, "{:?}", args).expect("TODO: panic message");
-    file_instance.sync_all()?;
-
-    Ok(())
-}*/
 
 pub fn flush_to_wal(args : String, payload: Option<Payload>, prev_lsn: u64) -> io::Result<u64> {
     let int_of_args = find_type(args.as_str());
@@ -35,14 +24,19 @@ pub fn flush_to_wal(args : String, payload: Option<Payload>, prev_lsn: u64) -> i
     let crc = crc32c::crc32c(&bytes);
     record_struct_instance.crc32c = crc;
 
-    let mut file_instance = File::open("log.bat")?;
-    
+
+    let mut file_instance = OpenOptions::new()
+        .read(true)
+        .append(true)
+        .open("log.bin")?;
     let current_position = file_instance.stream_position()?;
     record_struct_instance.lsn = current_position;
 
     let mut writer = BufWriter::new(file_instance);
     bincode::serialize_into(&mut writer, &record_struct_instance);
+
     std::io::Write::flush(&mut writer)?;
+    drop(writer);
 
     Ok(current_position)
 }

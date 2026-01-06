@@ -1,7 +1,6 @@
-use std::fs::File;
 use std::{fs, io};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::Ordering;
@@ -86,7 +85,7 @@ pub fn process_tcp_stream(mut stream: TcpStream, wal_file_path: &str, txd_count:
 }
 
 fn handle_cli_and_checkpoint(command: String,wal_file_path: &str, mut stream: &TcpStream, txd_count: Arc<RwLock<u32>>, vid_count: Arc<RwLock<u32>>, prev_lsn: Arc<RwLock<u64>> ,current_transaction: Arc<RwLock<Transaction>>, new_node: Arc<RwLock<Node>>, all_addr: Arc<RwLock<Vec<SocketAddr>>>, ts_ord: Arc<RwLock<HashMap<u32, u32>>> ,tx: &Sender<i32> ) -> io::Result<u8> {
-    match cli(command, Arc::clone(&txd_count), Arc::clone(&vid_count), Arc::clone(&prev_lsn), Arc::clone(&current_transaction) , Arc::clone(&new_node), Some(&stream), Arc::clone(&all_addr), Arc::clone(&ts_ord)) {
+    match cli(command, Arc::clone(&txd_count), Arc::clone(&vid_count), Arc::clone(&prev_lsn), Arc::clone(&current_transaction) , Arc::clone(&new_node), Some(&stream), Arc::clone(&all_addr), Arc::clone(&ts_ord), true) {
         Ok(1) => return Ok(1), // Invalid argument
         Ok(2) => return Ok(2), // Exit
         Ok(3) => { // Checkpoint

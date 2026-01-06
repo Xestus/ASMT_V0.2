@@ -17,16 +17,16 @@ pub fn create_command(payload_instance: Option<Payload>, command_type: u8) -> St
         Some(payload) => {
             match payload.v {
                 Some(value) => {
-                     format!("{:?} {:?} {:?}", find_command_from_id(command_type), payload.k, value)
+                     format!("{:?} {:?} {:?}", find_command_from_id(command_type).replace("\"", ""), payload.k, value.replace("\"", "")).replace("\"", "")
                 }
 
                 None => {
-                    format!("{:?} {:?}", find_command_from_id(command_type), payload.k)
+                    format!("{:?} {:?}", find_command_from_id(command_type), payload.k).replace("\"", "")
                 }
             }
         }
         None => {
-            find_command_from_id(command_type)
+            find_command_from_id(command_type).replace("\"", "")
         }
     }
 }
