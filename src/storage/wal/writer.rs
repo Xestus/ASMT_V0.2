@@ -1,10 +1,8 @@
 use std::io::{BufWriter, Seek, Write};
 use std::fs::File;
 use std::io;
-use std::sync::{Arc, RwLock};
-use crc32c::crc32c;
 use crate::storage::wal::record::{Payload, RecordStruct};
-use serde::{Serialize, Deserialize};
+use serde::{Serialize};
 
 /*pub fn flush_to_wal(file: Arc<RwLock<File>>, args: Vec<&str>) -> io::Result<()> {
     let args = args.join(" ");
@@ -37,7 +35,7 @@ pub fn flush_to_wal(args : String, payload: Option<Payload>, prev_lsn: u64) -> i
     let crc = crc32c::crc32c(&bytes);
     record_struct_instance.crc32c = crc;
 
-    let mut file_instance = File::open("log.bin")?;
+    let mut file_instance = File::open("log.bat")?;
     
     let current_position = file_instance.stream_position()?;
     record_struct_instance.lsn = current_position;

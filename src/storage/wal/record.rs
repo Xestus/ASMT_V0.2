@@ -1,6 +1,6 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct RecordStruct {
     pub magic: u32,
     pub version: u16,
@@ -12,7 +12,7 @@ pub struct RecordStruct {
     pub prev_lsn: u64,
     pub payload: Option<Payload>
 }
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Payload {
     pub k: u32,
     pub v: Option<String>,

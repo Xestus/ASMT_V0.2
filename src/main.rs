@@ -17,7 +17,7 @@ use ASMT::storage::wal::recovery::initialize_from_wal;
 fn main() -> io::Result<()> {
     NODE_SIZE.set(4).expect("Failed to set size");
     let serialized_file_path = "/home/_merinh/RustroverProjects/ASMT_V0.2/example.txt";
-    let wal_file_path = "/home/_merinh/RustroverProjects/ASMT_V0.2/WAL.bat";
+    let wal_file_path = "/home/_merinh/RustroverProjects/ASMT_V0.2/log.bat";
     let mut new_node = Node::new();
 
     let current_transaction = Arc::new(RwLock::new(Transaction { items: HashMap::new(), ip_txd: HashMap::new() }));
@@ -45,7 +45,7 @@ fn main() -> io::Result<()> {
                                                            Arc::new(RwLock::new(Transaction { items: HashMap::new(), ip_txd: HashMap::new() })),
                                                            Arc::clone(&new_node),
                                                            Arc::new(RwLock::new(Vec::new())),
-                                                           Arc::new(RwLock::new(HashMap::new())) )}
+                                                           Arc::new(RwLock::new(HashMap::new())) )?}
 
 
     let cloned_node = Arc::clone(&new_node);
